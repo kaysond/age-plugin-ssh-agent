@@ -1,8 +1,10 @@
 use ssh_agent_lib::blocking::Client;
-use ssh_agent_lib::proto::Identity;
+use ssh_agent_lib::proto::{Identity, SignRequest};
+use ssh_agent_lib::ssh_key::Algorithm;
 use ssh_agent_lib::ssh_key::HashAlg::Sha256;
 use std::error::Error;
 use std::os::unix::net::UnixStream;
+use zeroize::Zeroizing;
 
 pub fn retrieve_identities(socket_path: &str) -> Result<Vec<Identity>, Box<dyn Error>> {
     let mut client = Client::new(UnixStream::connect(socket_path)?);
@@ -47,4 +49,27 @@ pub fn select_identity(
     }
 
     Err(format!("could not find identity matching '{identity_string}'").into())
+}
+
+type AgentSignature = Zeroizing<Vec<u8>>;
+
+pub fn sign_data(
+    socket_path: &str,
+    identity: &Identity,
+    data: Vec<u8>,
+) -> Result<AgentSignature, Box<dyn Error>> {
+    let mut client = Client::new(UnixStream::connect(socket_path)?);
+
+    let request: SignRequest = SignRequest {
+        credential: identity.credential.clone(),
+        data: data,
+        flags: 0,
+    };
+    let signature = client.sign(request)?;
+
+    if signature.algorithm() != Algorithm::Ed25519 {
+        return Err("agent returned non-Ed25519 signature".into());
+    }
+
+    Ok(Zeroizing::new(signature.as_bytes().to_vec()).into())
 }

@@ -2,7 +2,6 @@ use age_core::format::{FileKey, Stanza};
 use age_plugin::{
     Callbacks, PluginHandler,
     identity::{self, IdentityPluginV1},
-    print_new_identity,
     recipient::{self, RecipientPluginV1},
 };
 
