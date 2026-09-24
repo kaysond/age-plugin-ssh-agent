@@ -1,14 +1,15 @@
 use age_core::primitives::bech32_encode;
 use age_plugin::run_state_machine;
-use age_plugin_ssh_agent::agent;
+use age_plugin_ssh_agent::agent::{IdentityStore, UnixIdentityStore};
 use age_plugin_ssh_agent::plugin;
 use bech32::Hrp;
 use chrono::{DateTime, Local, SecondsFormat};
-
 use clap::Parser;
 use hkdf::Hkdf;
 use rand::TryRng;
 use rand::rngs::SysRng;
+use ssh_agent_lib::blocking::Client;
+use std::os::unix::net::UnixStream;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
@@ -54,12 +55,22 @@ struct Arguments {
 fn main() -> io::Result<()> {
     let args = Arguments::parse();
 
-    if args.list_identities {
-        let agent_socket = args.agent_socket.as_deref().unwrap_or_else(|| {
-            eprintln!("no agent socket path specified and SSH_AUTH_SOCK env var isn't set");
+    let agent_socket = args.agent_socket.as_deref().unwrap_or_else(|| {
+        eprintln!("no agent socket path specified and SSH_AUTH_SOCK env var isn't set");
+        std::process::exit(1);
+    });
+
+    let stream = match UnixStream::connect(agent_socket) {
+        Ok(stream) => stream,
+        Err(e) => {
+            eprintln!("failed to connect to socket: {e}");
             std::process::exit(1);
-        });
-        match list_identities(agent_socket) {
+        }
+    };
+    let mut store = IdentityStore::new(Client::new(stream));
+
+    if args.list_identities {
+        match format_identities(&mut store) {
             Ok(identity_list) => {
                 println!("{identity_list}");
                 std::process::exit(0);
@@ -76,18 +87,16 @@ fn main() -> io::Result<()> {
             eprintln!("--identity must be supplied with --key-gen");
             std::process::exit(1);
         }
-        let agent_socket = args.agent_socket.as_deref().unwrap_or_else(|| {
-            eprintln!("no agent socket path specified and SSH_AUTH_SOCK env var isn't set");
-            std::process::exit(1);
-        });
-        let agent_identity = match generate_keys(agent_socket, &args.identity.unwrap()) {
-            Ok(agent_identity) => agent_identity,
+
+        let identity_file = match generate_identity(&mut store, &args.identity.unwrap()) {
+            Ok(identity_file) => identity_file,
             Err(e) => {
                 eprintln!("failed to generate keys: {e}");
                 std::process::exit(1);
             }
         };
-        if let Err(e) = dump_identity(&agent_identity, args.output.as_deref()) {
+
+        if let Err(e) = write_identity(&identity_file, args.output.as_deref()) {
             eprintln!("failed to write identity: {e}");
             std::process::exit(1);
         }
@@ -106,8 +115,9 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn list_identities(agent_socket: &str) -> Result<String, Box<dyn Error>> {
-    let identity_list = agent::retrieve_identities(agent_socket)?
+fn format_identities(store: &mut UnixIdentityStore) -> Result<String, Box<dyn Error>> {
+    let identity_list = store
+        .identities()?
         .iter()
         .map(|identity| {
             let fingerprint = identity.credential.key_data().fingerprint(Sha256);
@@ -118,7 +128,7 @@ fn list_identities(agent_socket: &str) -> Result<String, Box<dyn Error>> {
         .join("\n");
     Ok(identity_list)
 }
-struct AgentIdentity {
+struct IdentityFile {
     created: DateTime<Local>,
     recipient: String,
     identity: String,
@@ -126,7 +136,7 @@ struct AgentIdentity {
 
 // this needs to always match age; age-plugin has a print_new_identity()
 // function but it doesn't let you write to a file...
-impl fmt::Display for AgentIdentity {
+impl fmt::Display for IdentityFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
@@ -138,14 +148,17 @@ impl fmt::Display for AgentIdentity {
     }
 }
 
-fn generate_keys(agent_socket: &str, identity: &str) -> Result<AgentIdentity, Box<dyn Error>> {
-    let identity = agent::select_identity(agent_socket, identity)?;
+fn generate_identity(
+    store: &mut UnixIdentityStore,
+    identity: &str,
+) -> Result<IdentityFile, Box<dyn Error>> {
+    let credential = store.find(identity)?.credential.clone();
 
     let mut signature_salt = [0u8; 16];
     SysRng.try_fill_bytes(&mut signature_salt)?;
     let mut signature_data = b"age-plugin-ssh-agent/v1".to_vec();
     signature_data.extend_from_slice(&signature_salt);
-    let signature = agent::sign_data(agent_socket, &identity, signature_data.clone())?;
+    let signature = store.sign(&credential, signature_data.clone())?;
 
     let key = Hkdf::<sha2::Sha256>::new(Some(b"age-plugin-ssh-agent/v1/hkdf-salt"), &signature);
 
@@ -157,8 +170,7 @@ fn generate_keys(agent_socket: &str, identity: &str) -> Result<AgentIdentity, Bo
     // use age_core's bech32_encode because it doesn't enforce length restrictions
     let recipient = bech32_encode(RECIPIENT_HRP, PublicKey::from(&secret).as_bytes());
 
-    let mut ssh_agent_identity = identity
-        .credential
+    let mut ssh_agent_identity = credential
         .key_data()
         .fingerprint(Sha256)
         .as_bytes()
@@ -167,14 +179,14 @@ fn generate_keys(agent_socket: &str, identity: &str) -> Result<AgentIdentity, Bo
 
     let identity_hrp = Hrp::parse(&format!("age-plugin-{PLUGIN_NAME}-"))?;
 
-    Ok(AgentIdentity {
+    Ok(IdentityFile {
         created: Local::now(),
         recipient,
         identity: bech32_encode(identity_hrp, &ssh_agent_identity).to_uppercase(),
     })
 }
 
-fn dump_identity(new_identity: &AgentIdentity, output: Option<&str>) -> io::Result<()> {
+fn write_identity(new_identity: &IdentityFile, output: Option<&str>) -> io::Result<()> {
     let Some(path) = output else {
         println!("{new_identity}");
         return Ok(());
