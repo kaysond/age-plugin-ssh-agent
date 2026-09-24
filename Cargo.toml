@@ -1,0 +1,14 @@
+[package]
+name = "age-plugin-ssh-agent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+age-core = "0.12.0"
+age-plugin = "0.7.0"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+ssh-agent-lib = { version = "0.6.0", default-features = false }
+
+[[bin]]
+name = "age-plugin-ssh-agent"
+path = "src/main.rs"
