@@ -39,7 +39,14 @@ impl AgeIdentity {
             fingerprint: credential.key_data().fingerprint(Sha256),
             salt,
         };
+        // we filter for ed25519 identities only, so signatures should always be the same
+        // but we double check just in case because if they're not, data would be unrecoverable!!
         let signature = store.sign(credential, identity.signature_data())?;
+        let signature2 = store.sign(credential, identity.signature_data())?;
+
+        if signature != signature2 {
+            return Err("agent signatures are not deterministic!".into());
+        }
 
         let mut okm = Zeroizing::new([0u8; 32]);
         // do this all at once so the PRK (::new() step) is dropped immediately
