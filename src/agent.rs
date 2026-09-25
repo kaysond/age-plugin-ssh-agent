@@ -78,6 +78,9 @@ impl<A: SshAgent> IdentityStore<A> {
         let identities = self.identities()?;
 
         for identity in identities {
+            if identity_string == identity.comment {
+                return Ok(identity);
+            }
             // it's a little ambiguous in the help whether the arg should be prefixed or not
             let identity_string = if identity_string.starts_with("SHA256:") {
                 identity_string
@@ -89,7 +92,7 @@ impl<A: SshAgent> IdentityStore<A> {
                 .key_data()
                 .fingerprint(Sha256)
                 .to_string();
-            if identity_string == fingerprint || identity_string == identity.comment {
+            if identity_string == fingerprint {
                 return Ok(identity);
             }
         }
