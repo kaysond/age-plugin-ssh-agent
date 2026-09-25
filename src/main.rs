@@ -1,17 +1,11 @@
-use age_core::primitives::bech32_encode;
 use age_plugin::run_state_machine;
 use age_plugin_ssh_agent::agent::{IdentityStore, UnixIdentityStore};
+use age_plugin_ssh_agent::crypto::AgeIdentity;
 use age_plugin_ssh_agent::plugin;
-use bech32::Hrp;
 use chrono::{DateTime, Local, SecondsFormat};
 use clap::Parser;
-use hkdf::Hkdf;
-use rand::TryRng;
-use rand::rngs::SysRng;
 use ssh_agent_lib::blocking::Client;
 use std::os::unix::net::UnixStream;
-use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroizing;
 
 use std::error::Error;
 use std::fmt;
@@ -20,8 +14,6 @@ use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 
 use ssh_agent_lib::ssh_key::HashAlg::Sha256;
-const PLUGIN_NAME: &str = "ssh-agent";
-const RECIPIENT_HRP: Hrp = Hrp::parse_unchecked("age");
 
 #[derive(Debug, Parser)]
 #[command(name = "age-plugin-ssh-agent")]
@@ -128,7 +120,7 @@ fn format_identities(store: &mut UnixIdentityStore) -> Result<String, Box<dyn Er
         .join("\n");
     Ok(identity_list)
 }
-struct IdentityFile {
+struct AgeIdentityFile {
     created: DateTime<Local>,
     recipient: String,
     identity: String,
@@ -136,7 +128,7 @@ struct IdentityFile {
 
 // this needs to always match age; age-plugin has a print_new_identity()
 // function but it doesn't let you write to a file...
-impl fmt::Display for IdentityFile {
+impl fmt::Display for AgeIdentityFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
@@ -151,42 +143,18 @@ impl fmt::Display for IdentityFile {
 fn generate_identity(
     store: &mut UnixIdentityStore,
     identity: &str,
-) -> Result<IdentityFile, Box<dyn Error>> {
+) -> Result<AgeIdentityFile, Box<dyn Error>> {
     let credential = store.find(identity)?.credential.clone();
+    let (stored_identity, recipient) = AgeIdentity::new(store, &credential)?;
 
-    let mut signature_salt = [0u8; 16];
-    SysRng.try_fill_bytes(&mut signature_salt)?;
-    let mut signature_data = b"age-plugin-ssh-agent/v1".to_vec();
-    signature_data.extend_from_slice(&signature_salt);
-    let signature = store.sign(&credential, signature_data.clone())?;
-
-    let key = Hkdf::<sha2::Sha256>::new(Some(b"age-plugin-ssh-agent/v1/hkdf-salt"), &signature);
-
-    let mut okm = Zeroizing::new([0u8; 32]);
-    key.expand(b"age-plugin-ssh-agent/v1/X25519", okm.as_mut_slice())?;
-
-    // we have to match age here so it can encrypt with its native x25519 recipient
-    let secret = StaticSecret::from(*okm);
-    // use age_core's bech32_encode because it doesn't enforce length restrictions
-    let recipient = bech32_encode(RECIPIENT_HRP, PublicKey::from(&secret).as_bytes());
-
-    let mut ssh_agent_identity = credential
-        .key_data()
-        .fingerprint(Sha256)
-        .as_bytes()
-        .to_vec();
-    ssh_agent_identity.extend_from_slice(&signature_data);
-
-    let identity_hrp = Hrp::parse(&format!("age-plugin-{PLUGIN_NAME}-"))?;
-
-    Ok(IdentityFile {
+    Ok(AgeIdentityFile {
         created: Local::now(),
         recipient,
-        identity: bech32_encode(identity_hrp, &ssh_agent_identity).to_uppercase(),
+        identity: stored_identity.to_string(),
     })
 }
 
-fn write_identity(new_identity: &IdentityFile, output: Option<&str>) -> io::Result<()> {
+fn write_identity(new_identity: &AgeIdentityFile, output: Option<&str>) -> io::Result<()> {
     let Some(path) = output else {
         println!("{new_identity}");
         return Ok(());
