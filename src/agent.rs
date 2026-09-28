@@ -38,12 +38,10 @@ impl SshAgent for Client<UnixStream> {
             data,
             flags: 0,
         };
-        let signature = Client::sign(self, request)?;
 
-        if signature.algorithm() != Algorithm::Ed25519 {
-            return Err("agent returned non-Ed25519 signature".into());
-        }
-        Ok(Zeroizing::new(signature.as_bytes().to_vec()))
+        Ok(Zeroizing::new(
+            Client::sign(self, request)?.as_bytes().to_vec(),
+        ))
     }
 }
 
