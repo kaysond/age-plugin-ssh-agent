@@ -1,7 +1,6 @@
 use ssh_agent_lib::blocking::Client;
 use ssh_agent_lib::proto::message::PublicCredential;
 use ssh_agent_lib::proto::{Identity, SignRequest};
-use ssh_agent_lib::ssh_key::Algorithm;
 use ssh_agent_lib::ssh_key::HashAlg::Sha256;
 use std::error::Error;
 use std::os::unix::net::UnixStream;
