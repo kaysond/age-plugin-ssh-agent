@@ -3,6 +3,7 @@ use bech32::Hrp;
 use hkdf::Hkdf;
 use rand::TryRng;
 use rand::rngs::SysRng;
+use sha2::{Digest, Sha512};
 use ssh_agent_lib::proto::message::PublicCredential;
 use ssh_agent_lib::ssh_key::Fingerprint;
 use ssh_agent_lib::ssh_key::HashAlg::Sha256;
@@ -20,21 +21,23 @@ const HKDF_SALT: &[u8] = b"age-plugin-ssh-agent/v1/hkdf-salt";
 const HKDF_INFO: &[u8] = b"age-plugin-ssh-agent/v1/X25519";
 
 const RECIPIENT_HRP: Hrp = Hrp::parse_unchecked("age");
+const EXTRA_SALT_RECIPIENT_HRP: Hrp = Hrp::parse_unchecked("age-plugin-ssh-agent");
 const IDENTITY_HRP: Hrp = Hrp::parse_unchecked("age-plugin-ssh-agent-");
 
-// R ‖ S
 const ED25519_SIGNATURE_LEN: usize = 64;
 
 #[derive(Debug)]
 pub struct AgeIdentity {
     fingerprint: Fingerprint,
     salt: [u8; 16],
+    extra_salt: bool,
 }
 
 impl AgeIdentity {
     pub fn new<A: SshAgent>(
         store: &mut IdentityStore<A>,
         credential: &PublicCredential,
+        extra_salt: bool,
     ) -> Result<(Self, String), Box<dyn Error>> {
         let mut salt = [0u8; 16];
         SysRng.try_fill_bytes(&mut salt)?;
@@ -42,6 +45,7 @@ impl AgeIdentity {
         let identity = AgeIdentity {
             fingerprint: credential.key_data().fingerprint(Sha256),
             salt,
+            extra_salt,
         };
         let signature = store.sign(credential, identity.signature_data())?;
         // the agent hands back raw signature bytes with no algorithm, so length is all we can check
@@ -56,10 +60,18 @@ impl AgeIdentity {
             return Err("agent signatures are not deterministic!".into());
         }
 
-        let secret = derive_secret(&signature)?;
-        // we have to match age here so it can encrypt with its native x25519 recipient;
-        // age_core's bech32_encode because it doesn't enforce length restrictions
-        let recipient = bech32_encode(RECIPIENT_HRP, PublicKey::from(&secret).as_bytes());
+        let recipient = if identity.extra_salt {
+            let mut hasher = Sha512::new();
+            hasher.update(identity.fingerprint.as_bytes());
+            hasher.update(identity.salt);
+            let digest = hasher.finalize();
+            bech32_encode(EXTRA_SALT_RECIPIENT_HRP, digest.as_slice())
+        } else {
+            // we have to match age here so it can encrypt with its native x25519 recipient;
+            // age_core's bech32_encode because it doesn't enforce length restrictions
+            let public_key = PublicKey::from(&derive_secret(&signature)?);
+            bech32_encode(RECIPIENT_HRP, public_key.as_bytes())
+        };
 
         Ok((identity, recipient))
     }
@@ -115,6 +127,7 @@ mod tests {
         AgeIdentity {
             fingerprint: KeyData::Ed25519(Ed25519PublicKey([1; 32])).fingerprint(Sha256),
             salt: SALT,
+            extra_salt: false,
         }
     }
 

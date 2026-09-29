@@ -80,13 +80,14 @@ fn main() -> io::Result<()> {
             std::process::exit(1);
         }
 
-        let identity_file = match generate_identity(&mut store, &args.identity.unwrap()) {
-            Ok(identity_file) => identity_file,
-            Err(e) => {
-                eprintln!("failed to generate keys: {e}");
-                std::process::exit(1);
-            }
-        };
+        let identity_file =
+            match generate_identity(&mut store, &args.identity.unwrap(), args.extra_salt) {
+                Ok(identity_file) => identity_file,
+                Err(e) => {
+                    eprintln!("failed to generate keys: {e}");
+                    std::process::exit(1);
+                }
+            };
 
         if let Err(e) = write_identity(&identity_file, args.output.as_deref()) {
             eprintln!("failed to write identity: {e}");
@@ -143,9 +144,10 @@ impl fmt::Display for AgeIdentityFile {
 fn generate_identity(
     store: &mut UnixIdentityStore,
     identity: &str,
+    extra_salt: bool,
 ) -> Result<AgeIdentityFile, Box<dyn Error>> {
     let credential = store.find(identity)?.credential.clone();
-    let (stored_identity, recipient) = AgeIdentity::new(store, &credential)?;
+    let (stored_identity, recipient) = AgeIdentity::new(store, &credential, extra_salt)?;
 
     Ok(AgeIdentityFile {
         created: Local::now(),
