@@ -1,6 +1,6 @@
 use age_plugin::run_state_machine;
-use age_plugin_ssh_agent::agent::{IdentityStore, UnixIdentityStore};
-use age_plugin_ssh_agent::crypto::AgeIdentity;
+use age_plugin_ssh_agent::agent::{Agent, UnixStreamAgent};
+use age_plugin_ssh_agent::identity::Identity;
 use age_plugin_ssh_agent::plugin;
 use chrono::{DateTime, Local, SecondsFormat};
 use clap::Parser;
@@ -26,11 +26,6 @@ struct Arguments {
         long
     )]
     identity: Option<String>,
-    #[arg(
-        help = "use an additional salt for each encryption for added security (requires agent presence / approval for encryption)",
-        long
-    )]
-    extra_salt: bool,
     #[arg(
         help = "list available and valid (Ed25519) identities in the agent",
         long
@@ -59,10 +54,10 @@ fn main() -> io::Result<()> {
             std::process::exit(1);
         }
     };
-    let mut store = IdentityStore::new(Client::new(stream));
+    let mut agent = Agent::new(Client::new(stream));
 
     if args.list_identities {
-        match format_identities(&mut store) {
+        match format_identities(&mut agent) {
             Ok(identity_list) => {
                 println!("{identity_list}");
                 std::process::exit(0);
@@ -80,14 +75,13 @@ fn main() -> io::Result<()> {
             std::process::exit(1);
         }
 
-        let identity_file =
-            match generate_identity(&mut store, &args.identity.unwrap(), args.extra_salt) {
-                Ok(identity_file) => identity_file,
-                Err(e) => {
-                    eprintln!("failed to generate keys: {e}");
-                    std::process::exit(1);
-                }
-            };
+        let identity_file = match generate_identity(&mut agent, &args.identity.unwrap()) {
+            Ok(identity_file) => identity_file,
+            Err(e) => {
+                eprintln!("failed to generate keys: {e}");
+                std::process::exit(1);
+            }
+        };
 
         if let Err(e) = write_identity(&identity_file, args.output.as_deref()) {
             eprintln!("failed to write identity: {e}");
@@ -108,7 +102,7 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn format_identities(store: &mut UnixIdentityStore) -> Result<String, Box<dyn Error>> {
+fn format_identities(store: &mut UnixStreamAgent) -> Result<String, Box<dyn Error>> {
     let identity_list = store
         .identities()?
         .iter()
@@ -123,8 +117,8 @@ fn format_identities(store: &mut UnixIdentityStore) -> Result<String, Box<dyn Er
 }
 struct AgeIdentityFile {
     created: DateTime<Local>,
-    recipient: String,
     identity: String,
+    recipient: String,
 }
 
 // this needs to always match age; age-plugin has a print_new_identity()
@@ -142,17 +136,16 @@ impl fmt::Display for AgeIdentityFile {
 }
 
 fn generate_identity(
-    store: &mut UnixIdentityStore,
+    agent: &mut UnixStreamAgent,
     identity: &str,
-    extra_salt: bool,
 ) -> Result<AgeIdentityFile, Box<dyn Error>> {
-    let credential = store.find(identity)?.credential.clone();
-    let (stored_identity, recipient) = AgeIdentity::new(store, &credential, extra_salt)?;
+    let agent_identity = agent.find(identity)?;
+    let identity = Identity::new(agent_identity)?;
 
     Ok(AgeIdentityFile {
         created: Local::now(),
-        recipient,
-        identity: stored_identity.to_string(),
+        identity: identity.to_string(),
+        recipient: identity.recipient(agent)?,
     })
 }
 

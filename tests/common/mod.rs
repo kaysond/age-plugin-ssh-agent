@@ -10,11 +10,12 @@ use ssh_agent_lib::proto::message::PublicCredential;
 use ssh_agent_lib::ssh_key::public::{Ed25519PublicKey, KeyData, SkEd25519};
 use zeroize::Zeroizing;
 
-use age_plugin_ssh_agent::agent::SshAgent;
+use age_plugin_ssh_agent::agent::{AgentClient, SIGNATURE_LEN};
+use age_plugin_ssh_agent::identity::Identity as AgeIdentity;
 
 // SHA-512 is conveniently the same length as an Ed25519 signature
-pub fn deterministic_signature(data: &[u8]) -> Vec<u8> {
-    sha2::Sha512::digest(data).to_vec()
+pub fn deterministic_signature(data: &[u8]) -> [u8; SIGNATURE_LEN] {
+    sha2::Sha512::digest(data).into()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -22,7 +23,6 @@ pub enum SignMode {
     #[default]
     Deterministic,
     Varying,
-    WrongLength,
     Failing(String),
 }
 
@@ -74,7 +74,7 @@ impl MockAgent {
     }
 }
 
-impl SshAgent for MockAgent {
+impl AgentClient for MockAgent {
     fn request_identities(&mut self) -> Result<Vec<Identity>, Box<dyn Error>> {
         let mut state = self.state.borrow_mut();
         state.request_identities_calls += 1;
@@ -86,21 +86,20 @@ impl SshAgent for MockAgent {
 
     fn sign(
         &mut self,
-        credential: PublicCredential,
-        data: Vec<u8>,
-    ) -> Result<Zeroizing<Vec<u8>>, Box<dyn Error>> {
+        credential: &PublicCredential,
+        data: &[u8],
+    ) -> Result<Zeroizing<[u8; SIGNATURE_LEN]>, Box<dyn Error>> {
         let mut state = self.state.borrow_mut();
         let call = state.sign_calls.len();
         state.sign_calls.push(SignCall {
-            credential,
-            data: data.clone(),
+            credential: credential.clone(),
+            data: data.to_vec(),
         });
 
-        let mut signature = deterministic_signature(&data);
+        let mut signature = deterministic_signature(data);
         match &state.sign_mode {
             SignMode::Deterministic => {}
-            SignMode::Varying => *signature.last_mut().expect("non-empty") = call as u8,
-            SignMode::WrongLength => signature.truncate(32),
+            SignMode::Varying => signature[SIGNATURE_LEN - 1] = call as u8,
             SignMode::Failing(message) => return Err(message.clone().into()),
         }
         Ok(Zeroizing::new(signature))
@@ -127,4 +126,16 @@ pub fn sk_ed25519_identity(byte: u8, comment: &str) -> Identity {
         ))),
         comment: comment.to_owned(),
     }
+}
+
+/// The salt is the tail of the identity's bech32 payload.
+pub fn salt_of(identity: &AgeIdentity) -> Vec<u8> {
+    let (_, payload) = age_core::primitives::bech32_decode(
+        &identity.to_string(),
+        |e| format!("invalid bech32: {e}"),
+        |_| Ok(()),
+        |hrp, bytes| Ok((hrp, bytes.collect::<Vec<u8>>())),
+    )
+    .unwrap();
+    payload[payload.len() - 32..].to_vec()
 }

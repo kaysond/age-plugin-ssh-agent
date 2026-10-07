@@ -1,111 +1,36 @@
 mod common;
 
-use age_plugin_ssh_agent::agent::IdentityStore;
-use age_plugin_ssh_agent::crypto::AgeIdentity;
-use common::{MockAgent, SignMode, ed25519_credential};
+use age_plugin_ssh_agent::agent::Agent;
+use age_plugin_ssh_agent::crypto::{NAMESPACE, sign_identity};
+use age_plugin_ssh_agent::identity::Identity;
+use common::{MockAgent, deterministic_signature, ed25519_identity, salt_of};
 
-fn store_with(mode: SignMode) -> (MockAgent, IdentityStore<MockAgent>) {
-    let agent = MockAgent::new(vec![]).with_sign_mode(mode);
-    (agent.clone(), IdentityStore::new(agent))
-}
+#[test]
+fn sign_identity_signs_namespace_and_salt() {
+    let agent = MockAgent::default();
+    let mut store = Agent::new(agent.clone());
+    let agent_identity = ed25519_identity(1, "laptop");
+    let identity = Identity::new(&agent_identity).unwrap();
 
-/// The salt is the tail of the identity's bech32 payload.
-fn salt_of(identity: &AgeIdentity) -> Vec<u8> {
-    let (_, payload) = age_core::primitives::bech32_decode(
-        &identity.to_string(),
-        |e| format!("invalid bech32: {e}"),
-        |_| Ok(()),
-        |hrp, bytes| Ok((hrp, bytes.collect::<Vec<u8>>())),
-    )
-    .unwrap();
-    payload[payload.len() - 16..].to_vec()
+    let signature = sign_identity(&identity, &mut store, &agent_identity, None).unwrap();
+
+    let data = [NAMESPACE, &salt_of(&identity)].concat();
+    assert_eq!(*signature, deterministic_signature(&data));
+    assert_eq!(agent.sign_calls()[0].credential, agent_identity.credential);
+    assert_eq!(agent.sign_calls()[0].data, data);
 }
 
 #[test]
-fn new_signs_the_same_data_twice() {
-    let (agent, mut store) = store_with(SignMode::Deterministic);
-    let credential = ed25519_credential(1);
+fn sign_identity_appends_extra_salt() {
+    let agent = MockAgent::default();
+    let mut store = Agent::new(agent.clone());
+    let agent_identity = ed25519_identity(1, "laptop");
+    let identity = Identity::new(&agent_identity).unwrap();
 
-    let (identity, _) = AgeIdentity::new(&mut store, &credential, false).unwrap();
-
-    let calls = agent.sign_calls();
-    assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0], calls[1]);
-    assert_eq!(calls[0].credential, credential);
-    assert_eq!(
-        calls[0].data,
-        [&b"age-plugin-ssh-agent/v1"[..], &salt_of(&identity)].concat()
-    );
-}
-
-#[test]
-fn new_returns_an_age_recipient() {
-    let (_agent, mut store) = store_with(SignMode::Deterministic);
-
-    let (_, recipient) = AgeIdentity::new(&mut store, &ed25519_credential(1), false).unwrap();
-
-    let parsed: age::x25519::Recipient = recipient.parse().expect("valid age recipient");
-    assert_eq!(parsed.to_string(), recipient);
-}
-
-#[test]
-fn new_with_extra_salt_returns_an_age_plugin_ssh_agent_recipient() {
-    let (_agent, mut store) = store_with(SignMode::Deterministic);
-
-    let (_, recipient) = AgeIdentity::new(&mut store, &ed25519_credential(1), true).unwrap();
-
-    assert!(recipient.starts_with("age-plugin-ssh-agent1"));
-}
-
-#[test]
-fn new_rejects_nondeterministic_signatures() {
-    let (agent, mut store) = store_with(SignMode::Varying);
+    sign_identity(&identity, &mut store, &agent_identity, Some([7; 32])).unwrap();
 
     assert_eq!(
-        AgeIdentity::new(&mut store, &ed25519_credential(1), false)
-            .unwrap_err()
-            .to_string(),
-        "agent signatures are not deterministic!"
+        agent.sign_calls()[0].data,
+        [NAMESPACE, &salt_of(&identity), &[7; 32]].concat()
     );
-    assert_eq!(agent.sign_calls().len(), 2);
-}
-
-#[test]
-fn new_rejects_wrong_length_signatures() {
-    let (agent, mut store) = store_with(SignMode::WrongLength);
-
-    assert_eq!(
-        AgeIdentity::new(&mut store, &ed25519_credential(1), false)
-            .unwrap_err()
-            .to_string(),
-        "agent did not return an Ed25519-sized signature"
-    );
-    // it bails before asking the agent again
-    assert_eq!(agent.sign_calls().len(), 1);
-}
-
-#[test]
-fn new_propagates_sign_errors() {
-    let (agent, mut store) = store_with(SignMode::Failing("agent refused".into()));
-
-    assert_eq!(
-        AgeIdentity::new(&mut store, &ed25519_credential(1), false)
-            .unwrap_err()
-            .to_string(),
-        "agent refused"
-    );
-    assert_eq!(agent.sign_calls().len(), 1);
-}
-
-#[test]
-fn new_uses_a_random_salt() {
-    let (agent, mut store) = store_with(SignMode::Deterministic);
-    let credential = ed25519_credential(1);
-
-    let (_, first) = AgeIdentity::new(&mut store, &credential, false).unwrap();
-    let (_, second) = AgeIdentity::new(&mut store, &credential, false).unwrap();
-
-    assert_ne!(first, second);
-    let calls = agent.sign_calls();
-    assert_ne!(calls[0].data, calls[2].data);
 }

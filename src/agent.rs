@@ -6,48 +6,54 @@ use std::error::Error;
 use std::os::unix::net::UnixStream;
 use zeroize::Zeroizing;
 
-pub type UnixIdentityStore = IdentityStore<Client<UnixStream>>;
+pub type UnixStreamAgent = Agent<Client<UnixStream>>;
 
-pub trait SshAgent {
+pub const FINGERPRINT_LEN: usize = 32; // SHA256
+pub const SIGNATURE_LEN: usize = 64;
+
+pub trait AgentClient {
     fn request_identities(&mut self) -> Result<Vec<Identity>, Box<dyn Error>>;
     fn sign(
         &mut self,
-        credential: PublicCredential,
-        data: Vec<u8>,
-    ) -> Result<Zeroizing<Vec<u8>>, Box<dyn Error>>;
+        credential: &PublicCredential,
+        data: &[u8],
+    ) -> Result<Zeroizing<[u8; SIGNATURE_LEN]>, Box<dyn Error>>;
 }
 
-pub struct IdentityStore<A: SshAgent> {
-    agent: A,
+pub struct Agent<A: AgentClient> {
+    client: A,
     identities: Vec<Identity>,
 }
 
-impl SshAgent for Client<UnixStream> {
+impl AgentClient for Client<UnixStream> {
     fn request_identities(&mut self) -> Result<Vec<Identity>, Box<dyn Error>> {
-        // fully qualified so this can't silently recurse if the trait method is renamed
         Ok(Client::request_identities(self)?)
     }
     fn sign(
         &mut self,
-        credential: PublicCredential,
-        data: Vec<u8>,
-    ) -> Result<Zeroizing<Vec<u8>>, Box<dyn Error>> {
+        credential: &PublicCredential,
+        data: &[u8],
+    ) -> Result<Zeroizing<[u8; SIGNATURE_LEN]>, Box<dyn Error>> {
         let request: SignRequest = SignRequest {
-            credential,
-            data,
+            credential: credential.clone(),
+            data: data.to_vec(),
             flags: 0,
         };
 
-        Ok(Zeroizing::new(
-            Client::sign(self, request)?.as_bytes().to_vec(),
-        ))
+        let sig: Zeroizing<[u8; SIGNATURE_LEN]> = Zeroizing::new(
+            Client::sign(self, request)?
+                .as_bytes()
+                .try_into()
+                .map_err(|_| "agent returned a signature with the wrong size")?,
+        );
+        Ok(sig)
     }
 }
 
-impl<A: SshAgent> IdentityStore<A> {
-    pub fn new(agent: A) -> Self {
-        IdentityStore {
-            agent,
+impl<A: AgentClient> Agent<A> {
+    pub fn new(client: A) -> Self {
+        Agent {
+            client,
             identities: vec![],
         }
     }
@@ -57,7 +63,7 @@ impl<A: SshAgent> IdentityStore<A> {
             return Ok(&self.identities);
         }
         let identities: Vec<Identity> = self
-            .agent
+            .client
             .request_identities()?
             .into_iter()
             .filter(|identity| identity.credential.key_data().is_ed25519())
@@ -97,11 +103,42 @@ impl<A: SshAgent> IdentityStore<A> {
         Err(format!("could not find identity matching '{identity_string}'").into())
     }
 
+    pub fn find_bytes(
+        &mut self,
+        bytes: &[u8; FINGERPRINT_LEN],
+    ) -> Result<&Identity, Box<dyn Error>> {
+        let identities = self.identities()?;
+
+        for identity in identities {
+            if *bytes
+                == identity
+                    .credential
+                    .key_data()
+                    .fingerprint(Sha256)
+                    .sha256()
+                    .expect("fingerprint was not sha256")
+            {
+                return Ok(identity);
+            }
+        }
+        Err("could not find matching identity".into())
+    }
+
     pub fn sign(
         &mut self,
-        credential: &PublicCredential,
-        data: Vec<u8>,
-    ) -> Result<Zeroizing<Vec<u8>>, Box<dyn Error>> {
-        self.agent.sign(credential.clone(), data)
+        identity: &Identity,
+        data: &[u8],
+    ) -> Result<Zeroizing<[u8; SIGNATURE_LEN]>, Box<dyn Error>> {
+        let signature = self.client.sign(&identity.credential, data)?;
+        // ed25519 (which we filter for) should always result in the same signature
+        // other identity types, though, don't. just in case there's an implementation
+        // issue, we double check determinism of the signature. we pay the cost of doing
+        // this every single time because the alternative is data becoming totally unrecoverable
+        let signature2 = self.client.sign(&identity.credential, data)?;
+
+        if signature != signature2 {
+            return Err("agent signatures are not deterministic!".into());
+        }
+        Ok(signature)
     }
 }
