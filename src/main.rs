@@ -42,7 +42,7 @@ struct Arguments {
 fn main() -> io::Result<()> {
     let args = Arguments::parse();
 
-    let agent_socket = args.agent_socket.as_deref().unwrap_or_else(|| {
+    let agent_socket = args.agent_socket.unwrap_or_else(|| {
         eprintln!("no agent socket path specified and SSH_AUTH_SOCK env var isn't set");
         std::process::exit(1);
     });
@@ -92,7 +92,7 @@ fn main() -> io::Result<()> {
 
     if let Some(state_machine) = args.age_plugin {
         // The plugin was started by an age client; run the state machine.
-        run_state_machine(&state_machine, plugin::Handler)?;
+        run_state_machine(&state_machine, plugin::Handler { agent })?;
         return Ok(());
     }
 
@@ -117,8 +117,8 @@ fn format_identities(store: &mut UnixStreamAgent) -> Result<String, Box<dyn Erro
 }
 struct AgeIdentityFile {
     created: DateTime<Local>,
-    identity: String,
-    recipient: String,
+    identity: Identity,
+    recipient: age::x25519::Recipient,
 }
 
 // this needs to always match age; age-plugin has a print_new_identity()
@@ -141,11 +141,12 @@ fn generate_identity(
 ) -> Result<AgeIdentityFile, Box<dyn Error>> {
     let agent_identity = agent.find(identity)?;
     let identity = Identity::new(agent_identity)?;
+    let recipient = identity.age_recipient(agent)?;
 
     Ok(AgeIdentityFile {
         created: Local::now(),
-        identity: identity.to_string(),
-        recipient: identity.recipient(agent)?,
+        identity,
+        recipient,
     })
 }
 

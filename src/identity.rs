@@ -1,5 +1,4 @@
 use rand::TryRng;
-use x25519_dalek::PublicKey;
 
 use std::error::Error;
 use std::fmt;
@@ -35,19 +34,27 @@ impl Identity {
         Ok(Identity { fingerprint, salt })
     }
 
-    pub fn recipient<A: AgentClient>(
+    pub fn age_identity<A: AgentClient>(
         &self,
         agent: &mut Agent<A>,
-    ) -> Result<String, Box<dyn Error>> {
+    ) -> Result<age::x25519::Identity, Box<dyn Error>> {
         let agent_identity = agent.find_bytes(&self.fingerprint)?.clone();
-
         let signature = sign_identity(self, agent, &agent_identity, None)?;
+        let secret = derive_secret(signature.as_slice())?;
 
-        // we have to match age here so it can encrypt with its native x25519 recipient;
-        let public_key = PublicKey::from(&derive_secret(signature.as_slice())?);
-        let hrp = Hrp::parse_unchecked("age");
-        // age_core's bech32_encode because it doesn't enforce length restrictions
-        Ok(bech32_encode(hrp, public_key.as_bytes()))
+        // age only constructs an Identity from its string encoding
+        let encoded = Zeroizing::new(bech32_encode(
+            Hrp::parse_unchecked("AGE-SECRET-KEY-"),
+            secret.as_bytes(),
+        ));
+        Ok(Zeroizing::new(encoded.to_uppercase()).parse()?)
+    }
+
+    pub fn age_recipient<A: AgentClient>(
+        &self,
+        agent: &mut Agent<A>,
+    ) -> Result<age::x25519::Recipient, Box<dyn Error>> {
+        Ok(self.age_identity(agent)?.to_public())
     }
 
     fn to_bytes(&self) -> Zeroizing<[u8; NAMESPACE.len() + FINGERPRINT_LEN + SALT_LEN]> {

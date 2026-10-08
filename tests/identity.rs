@@ -16,8 +16,8 @@ fn new_uses_a_random_salt() {
 
     assert_ne!(salt_of(&first), salt_of(&second));
     assert_ne!(
-        first.recipient(&mut store).unwrap(),
-        second.recipient(&mut store).unwrap()
+        first.age_recipient(&mut store).unwrap(),
+        second.age_recipient(&mut store).unwrap()
     );
 }
 
@@ -29,14 +29,12 @@ fn recipient_derives_from_the_agent_signature() {
     ]));
     let identity = Identity::new(&ed25519_identity(1, "laptop")).unwrap();
 
-    let recipient = identity.recipient(&mut store).unwrap();
+    let recipient = identity.age_recipient(&mut store).unwrap();
 
     let signature = deterministic_signature(&[NAMESPACE, &salt_of(&identity)].concat());
     let public_key = PublicKey::from(&derive_secret(&signature).unwrap());
-    let parsed: age::x25519::Recipient = recipient.parse().expect("valid age recipient");
-    assert_eq!(parsed.to_string(), recipient);
     assert_eq!(
-        recipient,
+        recipient.to_string(),
         age_core::primitives::bech32_encode(
             bech32::Hrp::parse_unchecked("age"),
             public_key.as_bytes()
@@ -54,7 +52,7 @@ fn recipient_signs_with_the_matching_key() {
     let laptop = ed25519_identity(1, "laptop");
     let identity = Identity::new(&laptop).unwrap();
 
-    identity.recipient(&mut store).unwrap();
+    identity.age_recipient(&mut store).unwrap();
 
     assert_eq!(agent.sign_calls()[0].credential, laptop.credential);
 }
@@ -65,7 +63,7 @@ fn recipient_errors_when_key_is_not_in_agent() {
     let identity = Identity::new(&ed25519_identity(1, "laptop")).unwrap();
 
     assert_eq!(
-        identity.recipient(&mut store).unwrap_err().to_string(),
+        identity.age_recipient(&mut store).unwrap_err().to_string(),
         "could not find matching identity"
     );
 }
@@ -78,7 +76,7 @@ fn recipient_rejects_nondeterministic_signatures() {
     let identity = Identity::new(&ed25519_identity(1, "laptop")).unwrap();
 
     assert_eq!(
-        identity.recipient(&mut store).unwrap_err().to_string(),
+        identity.age_recipient(&mut store).unwrap_err().to_string(),
         "agent signatures are not deterministic!"
     );
 }
