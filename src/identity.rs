@@ -60,9 +60,20 @@ impl Identity {
         bytes
     }
 
-    // pub fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
-    //     let fingerprint = Fingerprint::from(bytes)
-    // }
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
+        if bytes.len() != NAMESPACE.len() + FINGERPRINT_LEN + SALT_LEN {
+            return Err("invalid identity".into());
+        }
+        let (namespace, rest) = bytes.split_at(NAMESPACE.len());
+        let (fingerprint, salt) = rest.split_at(FINGERPRINT_LEN);
+        if namespace != NAMESPACE {
+            return Err("invalid identity".into());
+        }
+        Ok(Identity {
+            fingerprint: fingerprint.try_into()?,
+            salt: Zeroizing::new(salt.try_into()?),
+        })
+    }
 }
 
 impl fmt::Display for Identity {
