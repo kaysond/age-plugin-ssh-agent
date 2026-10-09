@@ -10,13 +10,21 @@ use age_plugin_ssh_agent::identity::Identity;
 use age_plugin_ssh_agent::plugin::Handler;
 use common::{MockAgent, ed25519_identity};
 
-#[derive(Default)]
-struct MockCallbacks {
+struct MockCallbacks<E> {
     messages: usize,
-    errors: Vec<Error>,
+    errors: Vec<E>,
 }
 
-impl Callbacks<Error> for &mut MockCallbacks {
+impl<E> Default for MockCallbacks<E> {
+    fn default() -> Self {
+        MockCallbacks {
+            messages: 0,
+            errors: vec![],
+        }
+    }
+}
+
+impl<E> Callbacks<E> for &mut MockCallbacks<E> {
     fn message(&mut self, _: &str) -> age_core::plugin::Result<()> {
         self.messages += 1;
         Ok(Ok(()))
@@ -30,7 +38,7 @@ impl Callbacks<Error> for &mut MockCallbacks {
     fn request_secret(&mut self, _: &str) -> age_core::plugin::Result<SecretString> {
         unimplemented!()
     }
-    fn error(&mut self, error: Error) -> age_core::plugin::Result<()> {
+    fn error(&mut self, error: E) -> age_core::plugin::Result<()> {
         self.errors.push(error);
         Ok(Ok(()))
     }
@@ -82,7 +90,7 @@ fn unwraps_file_keys_with_agent_derived_secrets() {
             .is_ok()
     );
 
-    let mut callbacks = MockCallbacks::default();
+    let mut callbacks = MockCallbacks::<Error>::default();
     let mut results = plugin
         .unwrap_file_keys(
             vec![
@@ -115,5 +123,149 @@ fn unwraps_file_keys_with_agent_derived_secrets() {
             stanza_index: 0,
             ..
         }]
+    ));
+}
+
+#[test]
+fn recipient_plugin_rejects_recipients() {
+    use age_plugin::recipient::{self, RecipientPluginV1};
+
+    let mut plugin = Handler {
+        agent: Agent::new(MockAgent::new(vec![])),
+    }
+    .recipient_v1()
+    .unwrap();
+    assert!(matches!(
+        plugin.add_recipient(4, "ssh-agent", &[1, 2, 3]),
+        Err(recipient::Error::Recipient { index: 4, .. })
+    ));
+}
+
+#[test]
+fn recipient_plugin_adds_identities() {
+    use age_plugin::recipient::{self, RecipientPluginV1};
+
+    let identity = Identity::new(&ed25519_identity(1, "laptop")).unwrap();
+    let mut plugin = Handler {
+        agent: Agent::new(MockAgent::new(vec![])),
+    }
+    .recipient_v1()
+    .unwrap();
+    assert!(
+        plugin
+            .add_identity(0, "ssh-agent", &identity_bytes(&identity))
+            .is_ok()
+    );
+    assert!(matches!(
+        plugin.add_identity(1, "yubikey", &identity_bytes(&identity)),
+        Err(recipient::Error::Identity { index: 1, .. })
+    ));
+    assert!(matches!(
+        plugin.add_identity(2, "ssh-agent", &[1, 2, 3]),
+        Err(recipient::Error::Identity { index: 2, .. })
+    ));
+}
+
+#[test]
+fn wrapped_file_keys_round_trip() {
+    use age_plugin::recipient::RecipientPluginV1;
+
+    let agent_identity = ed25519_identity(1, "laptop");
+    let mock = MockAgent::new(vec![agent_identity.clone()]);
+    let identity = Identity::new(&agent_identity).unwrap();
+    let file_keys = [[7; 16], [9; 16]];
+
+    let mut recipient_plugin = Handler {
+        agent: Agent::new(mock.clone()),
+    }
+    .recipient_v1()
+    .unwrap();
+    assert!(
+        recipient_plugin
+            .add_identity(0, "ssh-agent", &identity_bytes(&identity))
+            .is_ok()
+    );
+    let mut callbacks = MockCallbacks::default();
+    let Ok(files) = recipient_plugin
+        .wrap_file_keys(
+            file_keys
+                .iter()
+                .map(|k| FileKey::new(Box::new(*k)))
+                .collect(),
+            &mut callbacks,
+        )
+        .unwrap()
+    else {
+        panic!("wrapping should succeed");
+    };
+
+    assert_eq!(callbacks.messages, 2);
+    assert!(files.iter().all(|stanzas| matches!(
+        &stanzas[..],
+        [Stanza { tag, args, .. }] if tag == "ssh-agent" && args.len() == 1
+    )));
+    assert_ne!(files[0][0].args, files[1][0].args);
+
+    let first = &files[0][0];
+    let mut tampered = Stanza {
+        tag: first.tag.clone(),
+        args: first.args.clone(),
+        body: first.body.clone(),
+    };
+    tampered.body[0] ^= 1;
+
+    let mut identity_plugin = Handler {
+        agent: Agent::new(mock),
+    }
+    .identity_v1()
+    .unwrap();
+    assert!(
+        identity_plugin
+            .add_identity(0, "ssh-agent", &identity_bytes(&identity))
+            .is_ok()
+    );
+    let mut callbacks = MockCallbacks::<Error>::default();
+    let mut files = files;
+    files.push(vec![tampered]);
+    let mut results = identity_plugin
+        .unwrap_file_keys(files, &mut callbacks)
+        .unwrap();
+
+    assert!(callbacks.errors.is_empty());
+    for (index, file_key) in file_keys.iter().enumerate() {
+        let Ok(unwrapped) = results.remove(&index).unwrap() else {
+            panic!("file {index} should unwrap");
+        };
+        assert_eq!(unwrapped.expose_secret(), file_key);
+    }
+    // a stanza that fails to decrypt belongs to someone else, not an error
+    assert!(results.is_empty());
+}
+
+#[test]
+fn wrap_fails_for_identity_missing_from_agent() {
+    use age_plugin::recipient::{self, RecipientPluginV1};
+
+    let identity = Identity::new(&ed25519_identity(2, "gone")).unwrap();
+    let mut plugin = Handler {
+        agent: Agent::new(MockAgent::new(vec![ed25519_identity(1, "laptop")])),
+    }
+    .recipient_v1()
+    .unwrap();
+    assert!(
+        plugin
+            .add_identity(3, "ssh-agent", &identity_bytes(&identity))
+            .is_ok()
+    );
+
+    let result = plugin
+        .wrap_file_keys(
+            vec![FileKey::new(Box::new([7; 16]))],
+            &mut MockCallbacks::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        result.as_ref().map_err(Vec::as_slice),
+        Err([recipient::Error::Identity { index: 3, .. }])
     ));
 }

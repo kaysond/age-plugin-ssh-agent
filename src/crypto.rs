@@ -12,7 +12,8 @@ use zeroize::Zeroizing;
 
 pub const NAMESPACE: &[u8] = b"age-plugin-ssh-agent/v1";
 const HKDF_SALT: &[u8] = b"age-plugin-ssh-agent/v1/hkdf-salt";
-const HKDF_INFO: &[u8] = b"age-plugin-ssh-agent/v1/X25519";
+const HKDF_X25519_INFO: &[u8] = b"age-plugin-ssh-agent/v1/X25519";
+const HKDF_WRAP_INFO: &[u8] = b"age-plugin-ssh-agent/v1/wrap";
 
 pub fn sign_identity<A: AgentClient>(
     identity: &Identity,
@@ -31,13 +32,23 @@ pub fn sign_identity<A: AgentClient>(
     agent.sign(agent_identity, &data)
 }
 
-pub fn derive_secret(ikm: &[u8]) -> Result<StaticSecret, Box<dyn Error>> {
+fn expand(ikm: &[u8], info: &[u8]) -> Result<Zeroizing<[u8; 32]>, Box<dyn Error>> {
     let mut okm = Zeroizing::new([0u8; 32]);
     // do this all at once so the PRK (::new() step) is dropped immediately
-    Hkdf::<Sha256>::new(Some(HKDF_SALT), ikm).expand(HKDF_INFO, okm.as_mut_slice())?;
+    Hkdf::<Sha256>::new(Some(HKDF_SALT), ikm).expand(info, okm.as_mut_slice())?;
+    Ok(okm)
+}
 
+pub fn derive_x25519_secret(ikm: &[u8]) -> Result<StaticSecret, Box<dyn Error>> {
     // use mem::take to zero okm immediately
-    Ok(StaticSecret::from(mem::take(&mut *okm)))
+    Ok(StaticSecret::from(mem::take(&mut *expand(
+        ikm,
+        HKDF_X25519_INFO,
+    )?)))
+}
+
+pub fn derive_wrapping_key(ikm: &[u8]) -> Result<Zeroizing<[u8; 32]>, Box<dyn Error>> {
+    expand(ikm, HKDF_WRAP_INFO)
 }
 
 #[cfg(test)]
@@ -52,6 +63,8 @@ mod tests {
     // "signature" of NAMESPACE ‖ [0, 1, .., 31]. This must never change without a version bump:
     // a different derivation makes every already-encrypted file unrecoverable.
     const RECIPIENT: &str = "age1435wlpvkpldxajj8usnzjgt4daqk5wp2qj6zjf3h47llt5v9e9ssjufxna";
+    // derived the same way (python HKDF-SHA256) with the wrap label; same stability rule applies
+    const WRAP_KEY: &str = "5436bf00e0c8482e7f2e5e6af11adae755b458764c50a6e1bf670af66141da43";
 
     // 64 bytes, so it stands in for an Ed25519 signature
     fn signature() -> Vec<u8> {
@@ -68,12 +81,22 @@ mod tests {
 
     #[test]
     fn derives_expected_recipient() {
-        assert_eq!(recipient(&derive_secret(&signature()).unwrap()), RECIPIENT);
+        assert_eq!(
+            recipient(&derive_x25519_secret(&signature()).unwrap()),
+            RECIPIENT
+        );
+    }
+
+    #[test]
+    fn derives_expected_wrap_key() {
+        let key = derive_wrapping_key(&signature()).unwrap();
+        let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, WRAP_KEY);
     }
 
     #[test]
     fn derived_secret_is_usable_by_age() {
-        let secret = derive_secret(&signature()).unwrap();
+        let secret = derive_x25519_secret(&signature()).unwrap();
 
         let recipient: age::x25519::Recipient =
             recipient(&secret).parse().expect("valid age recipient");

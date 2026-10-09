@@ -108,6 +108,7 @@ dependencies = [
  "age",
  "age-core",
  "age-plugin",
+ "base64",
  "bech32",
  "chrono",
  "clap",

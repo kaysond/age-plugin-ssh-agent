@@ -4,8 +4,11 @@ use std::error::Error;
 use std::fmt;
 
 use crate::agent::{Agent, AgentClient, FINGERPRINT_LEN};
-use crate::crypto::{NAMESPACE, derive_secret, sign_identity};
-use age_core::primitives::bech32_encode;
+use crate::crypto::{NAMESPACE, derive_wrapping_key, derive_x25519_secret, sign_identity};
+use age_core::format::{FILE_KEY_BYTES, FileKey, Stanza};
+use age_core::primitives::{aead_decrypt, aead_encrypt, bech32_encode};
+use age_core::secrecy::ExposeSecret;
+use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
 use bech32::Hrp;
 use rand::rngs::SysRng;
 use ssh_agent_lib::proto::Identity as AgentIdentity;
@@ -13,6 +16,7 @@ use ssh_agent_lib::ssh_key::HashAlg;
 use zeroize::Zeroizing;
 
 const SALT_LEN: usize = 32;
+pub const STANZA_TAG: &str = "ssh-agent";
 
 #[derive(Debug)]
 pub struct Identity {
@@ -40,7 +44,7 @@ impl Identity {
     ) -> Result<age::x25519::Identity, Box<dyn Error>> {
         let agent_identity = agent.find_bytes(&self.fingerprint)?.clone();
         let signature = sign_identity(self, agent, &agent_identity, None)?;
-        let secret = derive_secret(signature.as_slice())?;
+        let secret = derive_x25519_secret(signature.as_slice())?;
 
         // age only constructs an Identity from its string encoding
         let encoded = Zeroizing::new(bech32_encode(
@@ -55,6 +59,64 @@ impl Identity {
         agent: &mut Agent<A>,
     ) -> Result<age::x25519::Recipient, Box<dyn Error>> {
         Ok(self.age_identity(agent)?.to_public())
+    }
+
+    fn wrapping_key<A: AgentClient>(
+        &self,
+        agent: &mut Agent<A>,
+        file_salt: [u8; SALT_LEN],
+    ) -> Result<Zeroizing<[u8; 32]>, Box<dyn Error>> {
+        let agent_identity = agent.find_bytes(&self.fingerprint)?.clone();
+        let signature = sign_identity(self, agent, &agent_identity, Some(file_salt))?;
+        derive_wrapping_key(signature.as_slice())
+    }
+
+    pub fn wrap_file_key<A: AgentClient>(
+        &self,
+        agent: &mut Agent<A>,
+        file_key: &FileKey,
+    ) -> Result<Stanza, Box<dyn Error>> {
+        let mut file_salt = [0u8; SALT_LEN];
+        SysRng.try_fill_bytes(&mut file_salt)?;
+        let key = self.wrapping_key(agent, file_salt)?;
+        Ok(Stanza {
+            tag: STANZA_TAG.into(),
+            args: vec![BASE64_STANDARD_NO_PAD.encode(file_salt)],
+            // zero nonce is safe: the random file salt makes every key single-use
+            body: aead_encrypt(&key, file_key.expose_secret()),
+        })
+    }
+
+    pub fn unwrap_stanza<A: AgentClient>(
+        &self,
+        agent: &mut Agent<A>,
+        stanza: &Stanza,
+    ) -> Option<Result<FileKey, Box<dyn Error>>> {
+        if stanza.tag != STANZA_TAG {
+            return None;
+        }
+        let file_salt = match &stanza.args[..] {
+            [arg] => BASE64_STANDARD_NO_PAD
+                .decode(arg)
+                .ok()
+                .and_then(|salt| <[u8; SALT_LEN]>::try_from(salt).ok()),
+            _ => None,
+        };
+        let Some(file_salt) = file_salt else {
+            return Some(Err("invalid ssh-agent stanza arguments".into()));
+        };
+        if stanza.body.len() != FILE_KEY_BYTES + 16 {
+            return Some(Err("invalid ssh-agent stanza body".into()));
+        }
+        let key = match self.wrapping_key(agent, file_salt) {
+            Ok(key) => key,
+            Err(e) => return Some(Err(e)),
+        };
+        // a failed decryption means another identity wrapped this stanza
+        let plaintext = Zeroizing::new(aead_decrypt(&key, FILE_KEY_BYTES, &stanza.body).ok()?);
+        Some(Ok(FileKey::init_with_mut(|file_key| {
+            file_key.copy_from_slice(&plaintext)
+        })))
     }
 
     fn to_bytes(&self) -> Zeroizing<[u8; NAMESPACE.len() + FINGERPRINT_LEN + SALT_LEN]> {

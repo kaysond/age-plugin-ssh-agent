@@ -1,7 +1,7 @@
 mod common;
 
 use age_plugin_ssh_agent::agent::Agent;
-use age_plugin_ssh_agent::crypto::{NAMESPACE, derive_secret};
+use age_plugin_ssh_agent::crypto::{NAMESPACE, derive_x25519_secret};
 use age_plugin_ssh_agent::identity::Identity;
 use common::{MockAgent, SignMode, deterministic_signature, ed25519_identity, salt_of};
 use x25519_dalek::PublicKey;
@@ -32,7 +32,7 @@ fn recipient_derives_from_the_agent_signature() {
     let recipient = identity.age_recipient(&mut store).unwrap();
 
     let signature = deterministic_signature(&[NAMESPACE, &salt_of(&identity)].concat());
-    let public_key = PublicKey::from(&derive_secret(&signature).unwrap());
+    let public_key = PublicKey::from(&derive_x25519_secret(&signature).unwrap());
     assert_eq!(
         recipient.to_string(),
         age_core::primitives::bech32_encode(
