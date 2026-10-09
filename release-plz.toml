@@ -1,0 +1,7 @@
+[workspace]
+# not on crates.io: versions come from git tags, no cargo publish
+git_only = true
+# release.yml owns the GitHub release (draft, attach attested binaries, publish)
+git_release_enable = false
+# lib.rs exists only for integration tests; no public API to check
+semver_check = false

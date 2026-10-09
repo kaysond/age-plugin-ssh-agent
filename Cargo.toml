@@ -2,6 +2,7 @@
 name = "age-plugin-ssh-agent"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
 age = "0.12.1"

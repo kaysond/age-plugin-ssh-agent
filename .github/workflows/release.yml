@@ -1,0 +1,86 @@
+# Push to main: build binaries, upload as workflow run artifacts (nightly).
+# Tag vX.Y.Z (pushed by release-plz.yml): build, attest, and publish a GitHub Release.
+#
+# Repo owner: enable Settings > General > Releases > "Enable release
+# immutability". Releases are created as drafts and only published once every
+# asset is attached, so this workflow works with immutability on or off.
+#
+# Verify a release download:
+#   gh attestation verify age-plugin-ssh-agent-vX.Y.Z-<target>.tar.gz --repo kaysond/age-plugin-ssh-agent
+#   gh attestation verify SHA256SUMS --repo kaysond/age-plugin-ssh-agent
+#   sha256sum -c SHA256SUMS --ignore-missing
+# With immutable releases also:
+#   gh release verify vX.Y.Z --repo kaysond/age-plugin-ssh-agent
+#   gh release verify-asset vX.Y.Z <file> --repo kaysond/age-plugin-ssh-agent
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      ARCHIVE: age-plugin-ssh-agent-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      # No cache on tags: release builds must not consume caches written by branch runs.
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - run: cargo build --release --locked
+      - run: tar -czf "$ARCHIVE" -C target/release age-plugin-ssh-agent
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+      - run: sha256sum *.tar.gz > SHA256SUMS
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            *.tar.gz
+            SHA256SUMS
+      # Draft first, attach everything, then publish: immutable releases lock assets on publish.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes *.tar.gz SHA256SUMS
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
