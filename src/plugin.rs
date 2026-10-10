@@ -1,3 +1,9 @@
+//! `age-plugin` state machine handlers.
+//!
+//! The plugin has no recipient type of its own. Encryption works either by passing the
+//! derived `age1…` recipient to age (no plugin involved) or by encrypting to the plugin
+//! identity, which produces `ssh-agent` stanzas. Decryption handles both stanza kinds.
+
 use crate::agent::{Agent, AgentClient};
 use crate::identity::{Identity, STANZA_TAG};
 use age::Identity as _;
@@ -15,7 +21,9 @@ use std::io;
 // age keeps its own constant private
 const X25519_TAG: &str = "X25519";
 
+/// Entry point passed to [`age_plugin::run_state_machine`].
 pub struct Handler<A: AgentClient> {
+    /// Agent used for every signature the plugin requests.
     pub agent: Agent<A>,
 }
 
@@ -45,6 +53,9 @@ fn parse_identity(plugin_name: &str, bytes: &[u8]) -> Result<Identity, String> {
     Identity::from_bytes(bytes).map_err(|e| format!("could not deserialize identity: {e}"))
 }
 
+/// `recipient-v1` handler: wraps file keys for plugin identities (`age -e -i`).
+///
+/// Rejects plugin recipients, since none exist.
 pub struct RecipientPlugin<A: AgentClient> {
     agent: Agent<A>,
     identities: Vec<(usize, Identity)>,
@@ -80,6 +91,9 @@ impl<A: AgentClient> RecipientPluginV1 for RecipientPlugin<A> {
         HashSet::new()
     }
 
+    /// Produces one `ssh-agent` stanza per identity per file key, each with its own file salt.
+    ///
+    /// Any failure fails the whole call, returning every per-identity error.
     fn wrap_file_keys(
         &mut self,
         file_keys: Vec<FileKey>,
@@ -109,6 +123,7 @@ impl<A: AgentClient> RecipientPluginV1 for RecipientPlugin<A> {
     }
 }
 
+/// `identity-v1` handler: unwraps native X25519 stanzas and `ssh-agent` stanzas.
 pub struct IdentityPlugin<A: AgentClient> {
     agent: Agent<A>,
     identities: Vec<(usize, Identity)>,
@@ -127,6 +142,13 @@ impl<A: AgentClient> IdentityPluginV1 for IdentityPlugin<A> {
         Ok(())
     }
 
+    /// Derives each identity's X25519 secret up front, then tries every stanza against every
+    /// identity until one yields the file key. A stanza that errors for one identity is not
+    /// retried with the others.
+    ///
+    /// An identity whose secret cannot be derived (e.g. key missing from the agent) is reported
+    /// via `callbacks.error` and skipped. Files with no matching stanza are left out of the
+    /// result; files where only malformed or failing stanzas matched map to their errors.
     fn unwrap_file_keys(
         &mut self,
         files: Vec<Vec<Stanza>>,

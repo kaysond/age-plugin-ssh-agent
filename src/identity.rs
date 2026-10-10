@@ -1,3 +1,9 @@
+//! The plugin identity: which agent key to use and the salt it signs.
+//!
+//! Encoded as Bech32 with HRP `AGE-PLUGIN-SSH-AGENT-` over
+//! `NAMESPACE (23 bytes) ‖ SHA-256 key fingerprint (32) ‖ salt (32)`, uppercased like age's own
+//! secret keys.
+
 use rand::TryRng;
 
 use std::error::Error;
@@ -16,8 +22,15 @@ use ssh_agent_lib::ssh_key::HashAlg;
 use zeroize::Zeroizing;
 
 const SALT_LEN: usize = 32;
+/// Tag of stanzas produced by [`Identity::wrap_file_key`]: `-> ssh-agent <base64 file salt>`.
 pub const STANZA_TAG: &str = "ssh-agent";
 
+/// An ssh-agent key fingerprint plus a random salt.
+///
+/// Holds no secret key. The age secret is recomputed from an agent signature over the salt,
+/// so decrypting needs both this identity and access to the agent holding the key. Treat the
+/// encoding as sensitive anyway: with it, anyone who can use the agent can derive the secret.
+/// The salt is zeroized on drop; [`Debug`] output includes it, so do not log it.
 #[derive(Debug)]
 pub struct Identity {
     fingerprint: [u8; FINGERPRINT_LEN],
@@ -25,6 +38,10 @@ pub struct Identity {
 }
 
 impl Identity {
+    /// Creates an identity for `agent_identity` with a fresh 32-byte salt from the OS RNG.
+    ///
+    /// Each call gives a different salt and so a different age key. Errors only if the OS RNG
+    /// fails.
     pub fn new(agent_identity: &AgentIdentity) -> Result<Self, Box<dyn Error>> {
         let fingerprint: [u8; FINGERPRINT_LEN] = agent_identity
             .credential
@@ -38,6 +55,9 @@ impl Identity {
         Ok(Identity { fingerprint, salt })
     }
 
+    /// Derives the static age X25519 identity (no per-file salt).
+    ///
+    /// The result holds the secret key; do not log or persist it. Errors if the key is not in the agent, or signing fails or is not deterministic.
     pub fn age_identity<A: AgentClient>(
         &self,
         agent: &mut Agent<A>,
@@ -54,6 +74,9 @@ impl Identity {
         Ok(Zeroizing::new(encoded.to_uppercase()).parse()?)
     }
 
+    /// Derives the `age1…` recipient for [`Identity::age_identity`].
+    ///
+    /// Requires an agent signature, with the same errors as [`Identity::age_identity`].
     pub fn age_recipient<A: AgentClient>(
         &self,
         agent: &mut Agent<A>,
@@ -71,6 +94,11 @@ impl Identity {
         derive_wrapping_key(signature.as_slice())
     }
 
+    /// Wraps `file_key` in an `ssh-agent` stanza under a fresh per-file salt.
+    ///
+    /// The stanza argument is the unpadded base64 salt; the body is the file key encrypted
+    /// with the derived wrap key (ChaCha20-Poly1305). Errors if the RNG fails, the key is not
+    /// in the agent, or signing fails or is not deterministic.
     pub fn wrap_file_key<A: AgentClient>(
         &self,
         agent: &mut Agent<A>,
@@ -87,6 +115,11 @@ impl Identity {
         })
     }
 
+    /// Tries to unwrap an `ssh-agent` stanza with this identity.
+    ///
+    /// Returns `None` if the stanza is not tagged [`STANZA_TAG`] or does not decrypt (it was
+    /// wrapped by another identity). Returns `Some(Err(_))` if the stanza is malformed or the
+    /// agent cannot sign. Each call that reaches the agent costs two signatures.
     pub fn unwrap_stanza<A: AgentClient>(
         &self,
         agent: &mut Agent<A>,
@@ -129,6 +162,9 @@ impl Identity {
         bytes
     }
 
+    /// Parses the Bech32 payload of an identity string, as age passes it to the plugin.
+    ///
+    /// Errors if the length is wrong or the namespace prefix does not match.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
         if bytes.len() != NAMESPACE.len() + FINGERPRINT_LEN + SALT_LEN {
             return Err("invalid identity".into());
@@ -145,6 +181,7 @@ impl Identity {
     }
 }
 
+/// Writes the `AGE-PLUGIN-SSH-AGENT-1…` identity string. It contains the salt; do not log it.
 impl fmt::Display for Identity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let hrp = Hrp::parse_unchecked("age-plugin-ssh-agent-");

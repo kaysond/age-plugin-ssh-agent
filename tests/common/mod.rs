@@ -18,14 +18,19 @@ pub fn deterministic_signature(data: &[u8]) -> [u8; SIGNATURE_LEN] {
     sha2::Sha512::digest(data).into()
 }
 
+/// How `MockAgent::sign` responds.
 #[derive(Clone, Debug, Default)]
 pub enum SignMode {
+    /// SHA-512 of the data.
     #[default]
     Deterministic,
+    /// Last byte replaced by the call count, so repeated signatures differ.
     Varying,
+    /// Every sign call errors with this message.
     Failing(String),
 }
 
+/// A recorded sign request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignCall {
     pub credential: PublicCredential,
@@ -41,6 +46,8 @@ struct MockState {
     sign_calls: Vec<SignCall>,
 }
 
+/// In-memory [`AgentClient`]. Clones share state, so a test can inspect calls after handing
+/// one to `Agent`.
 #[derive(Clone, Debug, Default)]
 pub struct MockAgent {
     state: Rc<RefCell<MockState>>,
@@ -118,6 +125,7 @@ pub fn ed25519_identity(byte: u8, comment: &str) -> Identity {
     }
 }
 
+/// FIDO sk-ed25519 identity; `Agent::identities` filters it out.
 pub fn sk_ed25519_identity(byte: u8, comment: &str) -> Identity {
     Identity {
         credential: PublicCredential::Key(KeyData::SkEd25519(SkEd25519::new(

@@ -1,3 +1,8 @@
+//! `age-plugin-ssh-agent` binary.
+//!
+//! age runs it with `--age-plugin=<state machine>`; users run it with `--list-identities` or
+//! `--key-gen --identity <key>`. All modes connect to the agent first.
+
 use age_plugin::run_state_machine;
 use age_plugin_ssh_agent::agent::{Agent, UnixStreamAgent};
 use age_plugin_ssh_agent::identity::Identity;
@@ -22,7 +27,7 @@ struct Arguments {
     #[arg(help = "generate a new ssh-agent-backed keypair", long)]
     key_gen: bool,
     #[arg(
-        help = "identity to use for keypair generation (SHA256 fingerprint or fingerprint)",
+        help = "identity to use for keypair generation (SHA256 fingerprint or comment)",
         long
     )]
     identity: Option<String>,
@@ -156,6 +161,7 @@ fn write_identity(new_identity: &AgeIdentityFile, output: Option<&str>) -> io::R
         return Ok(());
     };
 
+    // never overwrite an existing identity: losing its salt makes its files unrecoverable
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)

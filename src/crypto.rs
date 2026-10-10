@@ -1,3 +1,8 @@
+//! Agent signing input and HKDF-SHA256 key derivation.
+//!
+//! Every constant here is part of the on-disk format: changing one changes every derived key
+//! and makes existing identities and files unrecoverable.
+
 use hkdf::Hkdf;
 use sha2::Sha256;
 use ssh_agent_lib::proto::Identity as AgentIdentity;
@@ -10,11 +15,20 @@ use crate::agent::{Agent, AgentClient};
 use crate::identity::Identity;
 use zeroize::Zeroizing;
 
+/// Domain separator prefixed to every message the agent signs, and to the identity encoding.
 pub const NAMESPACE: &[u8] = b"age-plugin-ssh-agent/v1";
 const HKDF_SALT: &[u8] = b"age-plugin-ssh-agent/v1/hkdf-salt";
 const HKDF_X25519_INFO: &[u8] = b"age-plugin-ssh-agent/v1/X25519";
 const HKDF_WRAP_INFO: &[u8] = b"age-plugin-ssh-agent/v1/wrap";
 
+/// Asks the agent to sign `NAMESPACE ‖ identity.salt [‖ salt]` with `agent_identity`.
+///
+/// `salt` is the per-file salt used for `ssh-agent` stanzas; `None` gives the signature behind
+/// the static X25519 identity. The returned signature is the HKDF input key material: it is
+/// secret and is zeroized on drop.
+///
+/// Errors if the agent fails to sign or its signatures are not deterministic (see
+/// [`Agent::sign`]).
 pub fn sign_identity<A: AgentClient>(
     identity: &Identity,
     agent: &mut Agent<A>,
@@ -39,6 +53,12 @@ fn expand(ikm: &[u8], info: &[u8]) -> Result<Zeroizing<[u8; 32]>, Box<dyn Error>
     Ok(okm)
 }
 
+/// Derives the static X25519 secret from an agent signature.
+///
+/// The returned [`StaticSecret`] is the age secret key. It is zeroized on drop; never log or
+/// persist it.
+///
+/// HKDF expansion cannot fail for a 32-byte output, so errors are not expected in practice.
 pub fn derive_x25519_secret(ikm: &[u8]) -> Result<StaticSecret, Box<dyn Error>> {
     // use mem::take to zero okm immediately
     Ok(StaticSecret::from(mem::take(&mut *expand(
@@ -47,6 +67,12 @@ pub fn derive_x25519_secret(ikm: &[u8]) -> Result<StaticSecret, Box<dyn Error>> 
     )?)))
 }
 
+/// Derives the ChaCha20-Poly1305 key that wraps a file key in an `ssh-agent` stanza.
+///
+/// `ikm` must be a signature that included a fresh per-file salt; the key is used with a
+/// zero nonce, so it must never wrap more than one file key.
+///
+/// HKDF expansion cannot fail for a 32-byte output, so errors are not expected in practice.
 pub fn derive_wrapping_key(ikm: &[u8]) -> Result<Zeroizing<[u8; 32]>, Box<dyn Error>> {
     expand(ikm, HKDF_WRAP_INFO)
 }
