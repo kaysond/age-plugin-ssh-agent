@@ -1,4 +1,5 @@
 # age-plugin-ssh-agent
+[![CI](https://github.com/kaysond/age-plugin-ssh-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/kaysond/age-plugin-ssh-agent/actions/workflows/ci.yml) [![Release](https://github.com/kaysond/age-plugin-ssh-agent/actions/workflows/release.yml/badge.svg)](https://github.com/kaysond/age-plugin-ssh-agent/actions/workflows/release.yml)
 
 An [age](https://age-encryption.org) plugin that derives keys from an ssh agent signature.
 
