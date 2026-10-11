@@ -44,7 +44,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd290633c2482479f70f6d1d96ae0e9f52c6a26cd5859edd47ee1fe33fc89f26"
 dependencies = [
  "age-core",
- "base64",
+ "base64 0.22.1",
  "bech32",
  "chacha20poly1305",
  "cipher",
@@ -75,7 +75,7 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01d4375964d1501e5f1b32aef2ead573913893ff238448d4e9fdf1522d828656"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bech32",
  "chacha20poly1305",
  "cookie-factory",
@@ -96,7 +96,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e639a0bf4973247c88bc8ff08517f0ee438d19ba3d40f6f340353c6ba9fc2aa"
 dependencies = [
  "age-core",
- "base64",
+ "base64 0.22.1",
  "bech32",
  "chrono",
 ]
@@ -108,7 +108,7 @@ dependencies = [
  "age",
  "age-core",
  "age-plugin",
- "base64",
+ "base64 0.23.1",
  "bech32",
  "chrono",
  "clap",
@@ -205,6 +205,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64ct"
