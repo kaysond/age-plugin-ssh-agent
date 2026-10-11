@@ -1,0 +1,6 @@
+[advisories]
+ignore = [
+    # rsa Marvin timing attack, no fix upstream. Pulled in by ssh-key for key
+    # parsing only; private-key RSA ops happen in the ssh-agent, not here.
+    "RUSTSEC-2023-0071",
+]
