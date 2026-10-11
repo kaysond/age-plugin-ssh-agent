@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+    ignore:
+      # must match age-core's bech32; bumped alongside age-core
+      - dependency-name: bech32
+        update-types: [version-update:semver-major, version-update:semver-minor]
+    groups:
+      # age crates share types and must move together
+      age:
+        patterns: [age, age-core, age-plugin]
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]
