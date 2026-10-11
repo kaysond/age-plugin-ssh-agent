@@ -15,7 +15,10 @@ fn sign_identity_signs_namespace_and_salt() {
     let signature = sign_identity(&identity, &mut store, &agent_identity, None).unwrap();
 
     let data = [NAMESPACE, &salt_of(&identity)].concat();
-    assert_eq!(*signature, deterministic_signature(&data));
+    assert_eq!(
+        *signature,
+        deterministic_signature(&agent_identity.credential, &data)
+    );
     assert_eq!(agent.sign_calls()[0].credential, agent_identity.credential);
     assert_eq!(agent.sign_calls()[0].data, data);
 }

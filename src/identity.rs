@@ -233,13 +233,35 @@ mod tests {
             |hrp, bytes| Ok((hrp, bytes.collect::<Vec<u8>>())),
         )
         .unwrap();
+        let parsed = Identity::from_bytes(&payload).unwrap();
 
         assert_eq!(hrp.as_str(), "AGE-PLUGIN-SSH-AGENT-");
-        assert_eq!(payload, identity.to_bytes().as_slice());
-        let (namespace, rest) = payload.split_at(NAMESPACE.len());
-        let (fingerprint, payload_salt) = rest.split_at(FINGERPRINT_LEN);
-        assert_eq!(namespace, NAMESPACE);
-        assert_eq!(fingerprint, identity.fingerprint);
-        assert_eq!(payload_salt, salt());
+        assert_eq!(parsed.fingerprint, identity.fingerprint);
+        assert_eq!(*parsed.salt, salt());
+    }
+
+    #[test]
+    fn from_bytes_rejects_wrong_namespace() {
+        let mut bytes = identity().to_bytes();
+        bytes[0] ^= 1;
+
+        assert_eq!(
+            Identity::from_bytes(bytes.as_slice())
+                .unwrap_err()
+                .to_string(),
+            "invalid identity"
+        );
+    }
+
+    #[test]
+    fn from_bytes_rejects_wrong_length() {
+        let bytes = identity().to_bytes();
+
+        for bytes in [&bytes[1..], &[bytes.as_slice(), &[0]].concat()] {
+            assert_eq!(
+                Identity::from_bytes(bytes).unwrap_err().to_string(),
+                "invalid identity"
+            );
+        }
     }
 }

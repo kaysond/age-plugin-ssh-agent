@@ -7,27 +7,32 @@ use std::rc::Rc;
 use sha2::Digest;
 use ssh_agent_lib::proto::Identity;
 use ssh_agent_lib::proto::message::PublicCredential;
+use ssh_agent_lib::ssh_key::HashAlg::Sha256;
 use ssh_agent_lib::ssh_key::public::{Ed25519PublicKey, KeyData, SkEd25519};
 use zeroize::Zeroizing;
 
 use age_plugin_ssh_agent::agent::{AgentClient, SIGNATURE_LEN};
 use age_plugin_ssh_agent::identity::Identity as AgeIdentity;
 
-// SHA-512 is conveniently the same length as an Ed25519 signature
-pub fn deterministic_signature(data: &[u8]) -> [u8; SIGNATURE_LEN] {
-    sha2::Sha512::digest(data).into()
+// SHA-512 is conveniently the same length as an Ed25519 signature. Hashing the key's raw
+// SHA-256 fingerprint in binds it to the key, so signing with the wrong key fails decryption.
+pub fn deterministic_signature(credential: &PublicCredential, data: &[u8]) -> [u8; SIGNATURE_LEN] {
+    let fingerprint = credential.key_data().fingerprint(Sha256);
+    sha2::Sha512::digest([fingerprint.as_bytes(), data].concat()).into()
 }
 
 /// How `MockAgent::sign` responds.
 #[derive(Clone, Debug, Default)]
 pub enum SignMode {
-    /// SHA-512 of the data.
+    /// SHA-512 of the key fingerprint and data.
     #[default]
     Deterministic,
     /// Last byte replaced by the call count, so repeated signatures differ.
     Varying,
     /// Every sign call errors with this message.
     Failing(String),
+    /// The first `n` sign calls succeed; later ones error with this message.
+    FailAfter(usize, String),
 }
 
 /// A recorded sign request.
@@ -103,11 +108,13 @@ impl AgentClient for MockAgent {
             data: data.to_vec(),
         });
 
-        let mut signature = deterministic_signature(data);
+        let mut signature = deterministic_signature(credential, data);
         match &state.sign_mode {
             SignMode::Deterministic => {}
             SignMode::Varying => signature[SIGNATURE_LEN - 1] = call as u8,
             SignMode::Failing(message) => return Err(message.clone().into()),
+            SignMode::FailAfter(n, message) if call >= *n => return Err(message.clone().into()),
+            SignMode::FailAfter(..) => {}
         }
         Ok(Zeroizing::new(signature))
     }
@@ -136,14 +143,35 @@ pub fn sk_ed25519_identity(byte: u8, comment: &str) -> Identity {
     }
 }
 
-/// The salt is the tail of the identity's bech32 payload.
-pub fn salt_of(identity: &AgeIdentity) -> Vec<u8> {
-    let (_, payload) = age_core::primitives::bech32_decode(
-        &identity.to_string(),
+// identity for key [1; 32] with salt [0, 1, .., 31], as pinned in src/identity.rs
+pub const KAT_IDENTITY: &str = "AGE-PLUGIN-SSH-AGENT-1V9NK2TTSD36KW6TW94EHX6PDV9NK2MN59AMRZ3TEH7HWVARE8NG4ETPZ6SZQGREFC8G4SP6RV6W0FG7JZHTL7CNSQQQSYQCYQ5RQWZQFPG9SCRGWPUGPZYSNZS23V9CCRYDPK8QARC0SA78MTJ";
+// derived outside this crate (python HKDF-SHA256 + X25519 + bech32) from the MockAgent
+// signature of KAT_IDENTITY: SHA-512(fingerprint([1; 32]) ‖ NAMESPACE ‖ [0, 1, .., 31])
+pub const KAT_RECIPIENT: &str = "age128dk9r3lt6wg8uuv3hp93q86fklrxpmkseccxmf7x8u74mwguszqa6pwv3";
+
+/// Decodes a bech32 string of any length (the `bech32` crate rejects over 90 characters).
+pub fn bech32_payload(encoded: &str) -> Vec<u8> {
+    age_core::primitives::bech32_decode(
+        encoded,
         |e| format!("invalid bech32: {e}"),
         |_| Ok(()),
-        |hrp, bytes| Ok((hrp, bytes.collect::<Vec<u8>>())),
+        |_, bytes| Ok(bytes.collect()),
     )
-    .unwrap();
+    .unwrap()
+}
+
+/// [`KAT_IDENTITY`], parsed.
+pub fn kat_identity() -> AgeIdentity {
+    AgeIdentity::from_bytes(&bech32_payload(KAT_IDENTITY)).unwrap()
+}
+
+/// The bytes age hands the plugin: the identity's bech32 payload.
+pub fn identity_bytes(identity: &AgeIdentity) -> Vec<u8> {
+    bech32_payload(&identity.to_string())
+}
+
+/// The salt is the tail of the identity's bech32 payload.
+pub fn salt_of(identity: &AgeIdentity) -> Vec<u8> {
+    let payload = identity_bytes(identity);
     payload[payload.len() - 32..].to_vec()
 }
