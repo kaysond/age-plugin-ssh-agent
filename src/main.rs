@@ -4,10 +4,10 @@
 //! `--key-gen --identity <key>`. All modes connect to the agent first.
 
 use age_plugin::run_state_machine;
-use age_plugin_ssh_agent::agent::{Agent, UnixStreamAgent};
+use age_plugin_ssh_agent::agent::{Agent, AgentClient};
 use age_plugin_ssh_agent::identity::Identity;
 use age_plugin_ssh_agent::plugin;
-use chrono::{DateTime, Local, SecondsFormat};
+use chrono::{DateTime, FixedOffset, Local, SecondsFormat};
 use clap::Parser;
 use ssh_agent_lib::blocking::Client;
 use std::os::unix::net::UnixStream;
@@ -107,7 +107,7 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn format_identities(store: &mut UnixStreamAgent) -> Result<String, Box<dyn Error>> {
+fn format_identities<A: AgentClient>(store: &mut Agent<A>) -> Result<String, Box<dyn Error>> {
     let identity_list = store
         .identities()?
         .iter()
@@ -121,7 +121,7 @@ fn format_identities(store: &mut UnixStreamAgent) -> Result<String, Box<dyn Erro
     Ok(identity_list)
 }
 struct AgeIdentityFile {
-    created: DateTime<Local>,
+    created: DateTime<FixedOffset>,
     identity: Identity,
     recipient: age::x25519::Recipient,
 }
@@ -140,8 +140,8 @@ impl fmt::Display for AgeIdentityFile {
     }
 }
 
-fn generate_identity(
-    agent: &mut UnixStreamAgent,
+fn generate_identity<A: AgentClient>(
+    agent: &mut Agent<A>,
     identity: &str,
 ) -> Result<AgeIdentityFile, Box<dyn Error>> {
     let agent_identity = agent.find(identity)?;
@@ -149,7 +149,7 @@ fn generate_identity(
     let recipient = identity.age_recipient(agent)?;
 
     Ok(AgeIdentityFile {
-        created: Local::now(),
+        created: Local::now().fixed_offset(),
         identity,
         recipient,
     })
@@ -173,4 +173,114 @@ fn write_identity(new_identity: &AgeIdentityFile, output: Option<&str>) -> io::R
     eprintln!("Public key: {}", new_identity.recipient);
 
     Ok(())
+}
+
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod common;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::common::{
+        KAT_IDENTITY, KAT_RECIPIENT, MockAgent, ed25519_identity, kat_identity, sk_ed25519_identity,
+    };
+
+    fn kat_identity_file() -> AgeIdentityFile {
+        AgeIdentityFile {
+            created: DateTime::parse_from_rfc3339("2026-10-09T12:34:56-07:00").unwrap(),
+            identity: kat_identity(),
+            recipient: KAT_RECIPIENT.parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn formats_ed25519_identities() {
+        let mut agent = Agent::new(MockAgent::new(vec![
+            ed25519_identity(1, "laptop"),
+            sk_ed25519_identity(2, "fido"),
+            ed25519_identity(3, "desktop"),
+        ]));
+        let desktop = ed25519_identity(3, "desktop")
+            .credential
+            .key_data()
+            .fingerprint(Sha256);
+
+        assert_eq!(
+            format_identities(&mut agent).unwrap(),
+            format!("SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA laptop\n{desktop} desktop")
+        );
+    }
+
+    #[test]
+    fn identity_file_matches_age_format() {
+        assert_eq!(
+            kat_identity_file().to_string(),
+            format!(
+                "# created: 2026-10-09T12:34:56-07:00\n# recipient: {KAT_RECIPIENT}\n{KAT_IDENTITY}"
+            )
+        );
+    }
+
+    #[test]
+    fn identity_file_writes_utc_as_z() {
+        let file = AgeIdentityFile {
+            created: DateTime::parse_from_rfc3339("2026-10-09T12:34:56+00:00").unwrap(),
+            ..kat_identity_file()
+        };
+
+        assert!(
+            file.to_string()
+                .starts_with("# created: 2026-10-09T12:34:56Z\n")
+        );
+    }
+
+    #[test]
+    fn generates_an_identity_for_the_requested_key() {
+        let mut agent = Agent::new(MockAgent::new(vec![
+            ed25519_identity(2, "desktop"),
+            ed25519_identity(1, "laptop"),
+        ]));
+
+        let file = generate_identity(&mut agent, "laptop").unwrap();
+
+        // only the laptop key is available, so this fails if another key was picked
+        let mut laptop = Agent::new(MockAgent::new(vec![ed25519_identity(1, "laptop")]));
+        assert_eq!(
+            file.recipient,
+            file.identity.age_recipient(&mut laptop).unwrap()
+        );
+    }
+
+    #[test]
+    fn generate_errors_for_unknown_key() {
+        let mut agent = Agent::new(MockAgent::new(vec![ed25519_identity(1, "laptop")]));
+
+        assert!(generate_identity(&mut agent, "nope").is_err());
+    }
+
+    #[test]
+    fn writes_identity_file_once_with_private_permissions() {
+        let path = std::env::temp_dir().join(format!(
+            "age-plugin-ssh-agent-test-{}.txt",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        let file = kat_identity_file();
+
+        write_identity(&file, path.to_str()).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        let overwrite = write_identity(&kat_identity_file(), path.to_str());
+        let after = fs::read_to_string(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert_eq!(written, format!("{file}\n"));
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(overwrite.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(after, written);
+    }
 }
