@@ -5,3 +5,5 @@ git_only = true
 git_release_enable = false
 # lib.rs exists only for integration tests; no public API to check
 semver_check = false
+# only tag when a release-plz PR is merged, not on every push to main
+release_always = false
