@@ -1,7 +1,7 @@
-//! The plugin identity: which agent key to use and the salt it signs.
+//! The plugin identity: which agent key to use and the secret it signs.
 //!
 //! Encoded as Bech32 with HRP `AGE-PLUGIN-SSH-AGENT-` over
-//! `NAMESPACE (23 bytes) ‖ SHA-256 key fingerprint (32) ‖ salt (32)`, uppercased like age's own
+//! `NAMESPACE (23 bytes) ‖ SHA-256 key fingerprint (32) ‖ secret (32)`, uppercased like age's own
 //! secret keys.
 
 use rand::TryRng;
@@ -21,26 +21,26 @@ use ssh_agent_lib::proto::Identity as AgentIdentity;
 use ssh_agent_lib::ssh_key::HashAlg;
 use zeroize::Zeroizing;
 
-const SALT_LEN: usize = 32;
+const SECRET_LEN: usize = 32;
+const FILE_SALT_LEN: usize = 32;
 /// Tag of stanzas produced by [`Identity::wrap_file_key`]: `-> ssh-agent <base64 file salt>`.
 pub const STANZA_TAG: &str = "ssh-agent";
 
-/// An ssh-agent key fingerprint plus a random salt.
+/// An ssh-agent key fingerprint plus an identity-bound secret.
 ///
-/// Holds no secret key. The age secret is recomputed from an agent signature over the salt,
-/// so decrypting needs both this identity and access to the agent holding the key. Treat the
-/// encoding as sensitive anyway: with it, anyone who can use the agent can derive the secret.
-/// The salt is zeroized on drop; [`Debug`] output includes it, so do not log it.
+/// The age secret is recomputed from an agent signature over the identity-bound secret,
+/// so decrypting needs both this identity and access to the agent holding the key.
+/// The secret is zeroized on drop; [`Debug`] output includes it, so do not log it.
 #[derive(Debug)]
 pub struct Identity {
     fingerprint: [u8; FINGERPRINT_LEN],
-    pub(crate) salt: Zeroizing<[u8; SALT_LEN]>,
+    pub(crate) secret: Zeroizing<[u8; SECRET_LEN]>,
 }
 
 impl Identity {
-    /// Creates an identity for `agent_identity` with a fresh 32-byte salt from the OS RNG.
+    /// Creates an identity for `agent_identity` with a fresh 32-byte secret from the OS RNG.
     ///
-    /// Each call gives a different salt and so a different age key. Errors only if the OS RNG
+    /// Each call gives a different secret and so a different age key. Errors only if the OS RNG
     /// fails.
     pub fn new(agent_identity: &AgentIdentity) -> Result<Self, Box<dyn Error>> {
         let fingerprint: [u8; FINGERPRINT_LEN] = agent_identity
@@ -49,10 +49,13 @@ impl Identity {
             .fingerprint(HashAlg::Sha256)
             .sha256()
             .expect("fingerprint was not SHA256");
-        let mut salt = Zeroizing::new([0u8; SALT_LEN]);
-        SysRng.try_fill_bytes(salt.as_mut_slice())?;
+        let mut secret = Zeroizing::new([0u8; SECRET_LEN]);
+        SysRng.try_fill_bytes(secret.as_mut_slice())?;
 
-        Ok(Identity { fingerprint, salt })
+        Ok(Identity {
+            fingerprint,
+            secret,
+        })
     }
 
     /// Derives the static age X25519 identity (no per-file salt).
@@ -87,7 +90,7 @@ impl Identity {
     fn wrapping_key<A: AgentClient>(
         &self,
         agent: &mut Agent<A>,
-        file_salt: [u8; SALT_LEN],
+        file_salt: [u8; FILE_SALT_LEN],
     ) -> Result<Zeroizing<[u8; 32]>, Box<dyn Error>> {
         let agent_identity = agent.find_bytes(&self.fingerprint)?.clone();
         let signature = sign_identity(self, agent, &agent_identity, Some(file_salt))?;
@@ -104,7 +107,7 @@ impl Identity {
         agent: &mut Agent<A>,
         file_key: &FileKey,
     ) -> Result<Stanza, Box<dyn Error>> {
-        let mut file_salt = [0u8; SALT_LEN];
+        let mut file_salt = [0u8; FILE_SALT_LEN];
         SysRng.try_fill_bytes(&mut file_salt)?;
         let key = self.wrapping_key(agent, file_salt)?;
         Ok(Stanza {
@@ -132,7 +135,7 @@ impl Identity {
             [arg] => BASE64_STANDARD_NO_PAD
                 .decode(arg)
                 .ok()
-                .and_then(|salt| <[u8; SALT_LEN]>::try_from(salt).ok()),
+                .and_then(|salt| <[u8; FILE_SALT_LEN]>::try_from(salt).ok()),
             _ => None,
         };
         let Some(file_salt) = file_salt else {
@@ -152,13 +155,13 @@ impl Identity {
         })))
     }
 
-    fn to_bytes(&self) -> Zeroizing<[u8; NAMESPACE.len() + FINGERPRINT_LEN + SALT_LEN]> {
-        let mut bytes = Zeroizing::new([0u8; NAMESPACE.len() + FINGERPRINT_LEN + SALT_LEN]);
+    fn to_bytes(&self) -> Zeroizing<[u8; NAMESPACE.len() + FINGERPRINT_LEN + SECRET_LEN]> {
+        let mut bytes = Zeroizing::new([0u8; NAMESPACE.len() + FINGERPRINT_LEN + SECRET_LEN]);
         let (namespace, rest) = bytes.split_at_mut(NAMESPACE.len());
-        let (fingerprint, salt) = rest.split_at_mut(FINGERPRINT_LEN);
+        let (fingerprint, secret) = rest.split_at_mut(FINGERPRINT_LEN);
         namespace.copy_from_slice(NAMESPACE);
         fingerprint.copy_from_slice(&self.fingerprint);
-        salt.copy_from_slice(self.salt.as_slice());
+        secret.copy_from_slice(self.secret.as_slice());
         bytes
     }
 
@@ -166,22 +169,22 @@ impl Identity {
     ///
     /// Errors if the length is wrong or the namespace prefix does not match.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
-        if bytes.len() != NAMESPACE.len() + FINGERPRINT_LEN + SALT_LEN {
+        if bytes.len() != NAMESPACE.len() + FINGERPRINT_LEN + SECRET_LEN {
             return Err("invalid identity".into());
         }
         let (namespace, rest) = bytes.split_at(NAMESPACE.len());
-        let (fingerprint, salt) = rest.split_at(FINGERPRINT_LEN);
+        let (fingerprint, secret) = rest.split_at(FINGERPRINT_LEN);
         if namespace != NAMESPACE {
             return Err("invalid identity".into());
         }
         Ok(Identity {
             fingerprint: fingerprint.try_into()?,
-            salt: Zeroizing::new(salt.try_into()?),
+            secret: Zeroizing::new(secret.try_into()?),
         })
     }
 }
 
-/// Writes the `AGE-PLUGIN-SSH-AGENT-1…` identity string. It contains the salt; do not log it.
+/// Writes the `AGE-PLUGIN-SSH-AGENT-1…` identity string. It contains the secret; do not log it.
 impl fmt::Display for Identity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let hrp = Hrp::parse_unchecked("age-plugin-ssh-agent-");
@@ -198,10 +201,10 @@ mod tests {
     use super::*;
 
     // derived outside this crate (python SHA-256 + bech32) from the all-ones Ed25519 key and
-    // SALT = [0, 1, .., 31]. These must never change without a version bump or existing identities break.
+    // secret = [0, 1, .., 31]. These must never change without a version bump or existing identities break.
     const IDENTITY: &str = "AGE-PLUGIN-SSH-AGENT-1V9NK2TTSD36KW6TW94EHX6PDV9NK2MN59AMRZ3TEH7HWVARE8NG4ETPZ6SZQGREFC8G4SP6RV6W0FG7JZHTL7CNSQQQSYQCYQ5RQWZQFPG9SCRGWPUGPZYSNZS23V9CCRYDPK8QARC0SA78MTJ";
 
-    fn salt() -> [u8; SALT_LEN] {
+    fn secret() -> [u8; SECRET_LEN] {
         std::array::from_fn(|i| i as u8)
     }
 
@@ -212,7 +215,7 @@ mod tests {
                 .fingerprint(HashAlg::Sha256)
                 .sha256()
                 .unwrap(),
-            salt: Zeroizing::new(salt()),
+            secret: Zeroizing::new(secret()),
         }
     }
 
@@ -237,7 +240,7 @@ mod tests {
 
         assert_eq!(hrp.as_str(), "AGE-PLUGIN-SSH-AGENT-");
         assert_eq!(parsed.fingerprint, identity.fingerprint);
-        assert_eq!(*parsed.salt, salt());
+        assert_eq!(*parsed.secret, secret());
     }
 
     #[test]

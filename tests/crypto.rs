@@ -3,10 +3,10 @@ mod common;
 use age_plugin_ssh_agent::agent::Agent;
 use age_plugin_ssh_agent::crypto::{NAMESPACE, sign_identity};
 use age_plugin_ssh_agent::identity::Identity;
-use common::{MockAgent, deterministic_signature, ed25519_identity, salt_of};
+use common::{MockAgent, deterministic_signature, ed25519_identity, secret_of};
 
 #[test]
-fn sign_identity_signs_namespace_and_salt() {
+fn sign_identity_signs_namespace_and_secret() {
     let agent = MockAgent::default();
     let mut store = Agent::new(agent.clone());
     let agent_identity = ed25519_identity(1, "laptop");
@@ -14,7 +14,7 @@ fn sign_identity_signs_namespace_and_salt() {
 
     let signature = sign_identity(&identity, &mut store, &agent_identity, None).unwrap();
 
-    let data = [NAMESPACE, &salt_of(&identity)].concat();
+    let data = [NAMESPACE, &secret_of(&identity)].concat();
     assert_eq!(
         *signature,
         deterministic_signature(&agent_identity.credential, &data)
@@ -24,7 +24,7 @@ fn sign_identity_signs_namespace_and_salt() {
 }
 
 #[test]
-fn sign_identity_appends_extra_salt() {
+fn sign_identity_appends_file_salt() {
     let agent = MockAgent::default();
     let mut store = Agent::new(agent.clone());
     let agent_identity = ed25519_identity(1, "laptop");
@@ -34,6 +34,6 @@ fn sign_identity_appends_extra_salt() {
 
     assert_eq!(
         agent.sign_calls()[0].data,
-        [NAMESPACE, &salt_of(&identity), &[7; 32]].concat()
+        [NAMESPACE, &secret_of(&identity), &[7; 32]].concat()
     );
 }

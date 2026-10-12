@@ -5,17 +5,17 @@ use age_core::secrecy::ExposeSecret;
 use age_plugin_ssh_agent::agent::Agent;
 use age_plugin_ssh_agent::identity::Identity;
 use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
-use common::{KAT_RECIPIENT, MockAgent, SignMode, ed25519_identity, kat_identity, salt_of};
+use common::{KAT_RECIPIENT, MockAgent, SignMode, ed25519_identity, kat_identity, secret_of};
 
 #[test]
-fn new_uses_a_random_salt() {
+fn new_uses_a_random_secret() {
     let agent_identity = ed25519_identity(1, "laptop");
     let mut store = Agent::new(MockAgent::new(vec![agent_identity.clone()]));
 
     let first = Identity::new(&agent_identity).unwrap();
     let second = Identity::new(&agent_identity).unwrap();
 
-    assert_ne!(salt_of(&first), salt_of(&second));
+    assert_ne!(secret_of(&first), secret_of(&second));
     assert_ne!(
         first.age_recipient(&mut store).unwrap(),
         second.age_recipient(&mut store).unwrap()

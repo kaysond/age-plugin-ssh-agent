@@ -143,7 +143,7 @@ pub fn sk_ed25519_identity(byte: u8, comment: &str) -> Identity {
     }
 }
 
-// identity for key [1; 32] with salt [0, 1, .., 31], as pinned in src/identity.rs
+// identity for key [1; 32] with secret [0, 1, .., 31], as pinned in src/identity.rs
 pub const KAT_IDENTITY: &str = "AGE-PLUGIN-SSH-AGENT-1V9NK2TTSD36KW6TW94EHX6PDV9NK2MN59AMRZ3TEH7HWVARE8NG4ETPZ6SZQGREFC8G4SP6RV6W0FG7JZHTL7CNSQQQSYQCYQ5RQWZQFPG9SCRGWPUGPZYSNZS23V9CCRYDPK8QARC0SA78MTJ";
 // derived outside this crate (python HKDF-SHA256 + X25519 + bech32) from the MockAgent
 // signature of KAT_IDENTITY: SHA-512(fingerprint([1; 32]) ‖ NAMESPACE ‖ [0, 1, .., 31])
@@ -170,8 +170,8 @@ pub fn identity_bytes(identity: &AgeIdentity) -> Vec<u8> {
     bech32_payload(&identity.to_string())
 }
 
-/// The salt is the tail of the identity's bech32 payload.
-pub fn salt_of(identity: &AgeIdentity) -> Vec<u8> {
+/// The secret is the tail of the identity's bech32 payload.
+pub fn secret_of(identity: &AgeIdentity) -> Vec<u8> {
     let payload = identity_bytes(identity);
     payload[payload.len() - 32..].to_vec()
 }

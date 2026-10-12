@@ -1,15 +1,15 @@
 //! An [age](https://age-encryption.org) plugin that derives X25519 keys from an ssh-agent
 //! Ed25519 key.
 //!
-//! No secret key is stored on disk. The identity file holds only the SSH key's SHA-256
-//! fingerprint and a random salt; the secret is recomputed on demand by asking the agent to
-//! sign a fixed message. Ed25519 signatures are deterministic, so the same key and salt always
-//! give the same secret.
+//! No age secret key is stored on disk. The identity file holds only the SSH key's SHA-256
+//! fingerprint and a random secret; the age key is recomputed on demand by asking the agent to
+//! sign a fixed message. Ed25519 signatures are deterministic, so the same SSH key and secret always
+//! give the same age key.
 //!
 //! # Key derivation
 //!
 //! ```text
-//! sig      = agent.sign(key, NAMESPACE ‖ identity_salt [‖ file_salt])
+//! sig      = agent.sign(key, NAMESPACE ‖ identity_secret [‖ file_salt])
 //! x25519   = HKDF-SHA256(salt = "age-plugin-ssh-agent/v1/hkdf-salt", ikm = sig,
 //!                        info = "age-plugin-ssh-agent/v1/X25519")
 //! wrap_key = HKDF-SHA256(same salt, ikm = sig, info = "age-plugin-ssh-agent/v1/wrap")
@@ -28,7 +28,7 @@
 //!
 //! # Security
 //!
-//! * Signatures, signed messages, derived keys, and the identity salt live in zeroize-on-drop
+//! * Signatures, signed messages, derived keys, and the identity secret live in zeroize-on-drop
 //!   buffers.
 //! * Never log signatures, derived keys, or identity strings (including the `Debug` output of
 //!   [`identity::Identity`]): an identity plus agent access yields the secret key.

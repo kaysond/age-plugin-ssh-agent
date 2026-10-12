@@ -161,7 +161,7 @@ fn write_identity(new_identity: &AgeIdentityFile, output: Option<&str>) -> io::R
         return Ok(());
     };
 
-    // never overwrite an existing identity: losing its salt makes its files unrecoverable
+    // never overwrite an existing identity: losing its secret makes its files unrecoverable
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)

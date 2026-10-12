@@ -21,9 +21,9 @@ const HKDF_SALT: &[u8] = b"age-plugin-ssh-agent/v1/hkdf-salt";
 const HKDF_X25519_INFO: &[u8] = b"age-plugin-ssh-agent/v1/X25519";
 const HKDF_WRAP_INFO: &[u8] = b"age-plugin-ssh-agent/v1/wrap";
 
-/// Asks the agent to sign `NAMESPACE ‖ identity.salt [‖ salt]` with `agent_identity`.
+/// Asks the agent to sign `NAMESPACE ‖ identity.secret [‖ file_salt]` with `agent_identity`.
 ///
-/// `salt` is the per-file salt used for `ssh-agent` stanzas; `None` gives the signature behind
+/// `file_salt` is the per-file salt used for `ssh-agent` stanzas; `None` gives the signature behind
 /// the static X25519 identity. The returned signature is the HKDF input key material: it is
 /// secret and is zeroized on drop.
 ///
@@ -33,13 +33,13 @@ pub fn sign_identity<A: AgentClient>(
     identity: &Identity,
     agent: &mut Agent<A>,
     agent_identity: &AgentIdentity,
-    salt: Option<[u8; 32]>,
+    file_salt: Option<[u8; 32]>,
 ) -> Result<Zeroizing<[u8; 64]>, Box<dyn Error>> {
     let data = Zeroizing::new(
         [
             NAMESPACE,
-            identity.salt.as_slice(),
-            salt.as_slice().as_flattened(),
+            identity.secret.as_slice(),
+            file_salt.as_slice().as_flattened(),
         ]
         .concat(),
     );
@@ -94,8 +94,8 @@ mod tests {
 
     // 64 bytes, so it stands in for an Ed25519 signature
     fn signature() -> Vec<u8> {
-        let salt: Vec<u8> = (0..32).collect();
-        Sha512::digest([NAMESPACE, &salt].concat()).to_vec()
+        let secret: Vec<u8> = (0..32).collect();
+        Sha512::digest([NAMESPACE, &secret].concat()).to_vec()
     }
 
     fn recipient(secret: &StaticSecret) -> String {
