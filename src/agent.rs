@@ -5,9 +5,11 @@
 use ssh_agent_lib::blocking::Client;
 use ssh_agent_lib::proto::message::PublicCredential;
 use ssh_agent_lib::proto::{Identity, SignRequest};
+use ssh_agent_lib::ssh_key::Fingerprint;
 use ssh_agent_lib::ssh_key::HashAlg::Sha256;
 use std::error::Error;
 use std::os::unix::net::UnixStream;
+use std::str::FromStr;
 use zeroize::Zeroizing;
 
 /// [`Agent`] over a Unix socket connection, as used by the binary.
@@ -98,33 +100,20 @@ impl<A: AgentClient> Agent<A> {
         Ok(&self.identities)
     }
 
-    /// Finds a key by comment or by SHA-256 fingerprint, with or without the `SHA256:` prefix.
+    /// Finds a key by SHA-256 fingerprint string
     ///
     /// Errors if no Ed25519 key matches.
-    pub fn find(&mut self, identity_string: &str) -> Result<&Identity, Box<dyn Error>> {
-        let identities = self.identities()?;
-
-        for identity in identities {
-            if identity_string == identity.comment {
-                return Ok(identity);
-            }
-            // it's a little ambiguous in the help whether the arg should be prefixed or not
-            let identity_string = if identity_string.starts_with("SHA256:") {
-                identity_string
-            } else {
-                &format!("SHA256:{identity_string}")
-            };
-            let fingerprint = identity
-                .credential
-                .key_data()
-                .fingerprint(Sha256)
-                .to_string();
-            if identity_string == fingerprint {
-                return Ok(identity);
-            }
+    pub fn find_string(&mut self, string: &str) -> Result<&Identity, Box<dyn Error>> {
+        if !string.starts_with("SHA256:") {
+            return Err("identity string must start with 'SHA256:'".into());
         }
 
-        Err(format!("could not find identity matching '{identity_string}'").into())
+        let fingerprint = Fingerprint::from_str(string)
+            .map_err(|e| format!("could not parse fingerprint from '{string}': {e}"))?
+            .sha256()
+            .ok_or("fingerprint must be SHA256")?;
+
+        self.find_bytes(&fingerprint)
     }
 
     /// Finds a key by its raw SHA-256 fingerprint, as stored in an

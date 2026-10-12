@@ -53,11 +53,11 @@ List usable (Ed25519) ssh agent identities:
 age-plugin-ssh-agent --list-identities
 ```
 
-Generate an identity for one of them, by fingerprint or comment:
+Generate an identity for one of them:
 (Print the identity to stdout by omitting `-o`)
 
 ```sh
-age-plugin-ssh-agent --key-gen --identity [SHA256:... | 'my comment'] -o /path/to/identity.txt
+age-plugin-ssh-agent --key-gen --identity SHA256:... -o /path/to/identity.txt
 ```
 
 Decrypt a file (requires plugin and agent present):

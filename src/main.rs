@@ -27,7 +27,7 @@ struct Arguments {
     #[arg(help = "generate a new ssh-agent-backed keypair", long)]
     key_gen: bool,
     #[arg(
-        help = "identity to use for keypair generation (SHA256 fingerprint or comment)",
+        help = "identity to use for keypair generation (SHA256 fingerprint, including \"SHA256:\")",
         long
     )]
     identity: Option<String>,
@@ -144,7 +144,7 @@ fn generate_identity<A: AgentClient>(
     agent: &mut Agent<A>,
     identity: &str,
 ) -> Result<AgeIdentityFile, Box<dyn Error>> {
-    let agent_identity = agent.find(identity)?;
+    let agent_identity = agent.find_string(identity)?;
     let identity = Identity::new(agent_identity)?;
     let recipient = identity.age_recipient(agent)?;
 
@@ -245,7 +245,11 @@ mod tests {
             ed25519_identity(1, "laptop"),
         ]));
 
-        let file = generate_identity(&mut agent, "laptop").unwrap();
+        let file = generate_identity(
+            &mut agent,
+            "SHA256:RXm/ruZ0eTzRXKwi1AQEDynB0VgHQ2ac9KPSFdf/YnA",
+        )
+        .unwrap();
 
         // only the laptop key is available, so this fails if another key was picked
         let mut laptop = Agent::new(MockAgent::new(vec![ed25519_identity(1, "laptop")]));
@@ -258,8 +262,12 @@ mod tests {
     #[test]
     fn generate_errors_for_unknown_key() {
         let mut agent = Agent::new(MockAgent::new(vec![ed25519_identity(1, "laptop")]));
+        let unknown = ed25519_identity(2, "desktop")
+            .credential
+            .key_data()
+            .fingerprint(Sha256);
 
-        assert!(generate_identity(&mut agent, "nope").is_err());
+        assert!(generate_identity(&mut agent, &unknown.to_string()).is_err());
     }
 
     #[test]

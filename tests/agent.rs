@@ -82,44 +82,50 @@ fn identities_propagates_agent_error() {
 fn find_by_prefixed_fingerprint() {
     let mut store = store_with_two_keys();
 
-    assert_eq!(store.find(FINGERPRINT_1).unwrap().comment, "laptop");
+    assert_eq!(store.find_string(FINGERPRINT_1).unwrap().comment, "laptop");
 }
 
 #[test]
-fn find_by_bare_fingerprint() {
+fn find_requires_sha256_prefix() {
     let mut store = store_with_two_keys();
     let bare = FINGERPRINT_1.strip_prefix("SHA256:").unwrap();
 
-    assert_eq!(store.find(bare).unwrap().comment, "laptop");
-}
-
-#[test]
-fn find_by_comment() {
-    let mut store = store_with_two_keys();
-
-    assert_eq!(
-        store.find("desktop").unwrap().credential,
-        ed25519_credential(3)
-    );
+    for string in [bare, "desktop"] {
+        assert_eq!(
+            store.find_string(string).unwrap_err().to_string(),
+            "identity string must start with 'SHA256:'"
+        );
+    }
 }
 
 #[test]
 fn find_errors_for_unknown() {
     let mut store = store_with_two_keys();
+    let unknown = ed25519_credential(9).key_data().fingerprint(Sha256);
 
     assert_eq!(
-        store.find("nope").unwrap_err().to_string(),
-        "could not find identity matching 'nope'"
+        store
+            .find_string(&unknown.to_string())
+            .unwrap_err()
+            .to_string(),
+        "could not find matching identity"
     );
 }
 
 #[test]
 fn find_ignores_filtered_identities() {
     let mut store = store_with_two_keys();
+    let fido = sk_ed25519_identity(2, "fido")
+        .credential
+        .key_data()
+        .fingerprint(Sha256);
 
     assert_eq!(
-        store.find("fido").unwrap_err().to_string(),
-        "could not find identity matching 'fido'"
+        store
+            .find_string(&fido.to_string())
+            .unwrap_err()
+            .to_string(),
+        "could not find matching identity"
     );
 }
 
