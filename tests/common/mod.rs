@@ -4,12 +4,12 @@ use std::cell::RefCell;
 use std::error::Error;
 use std::rc::Rc;
 
+use age_core::secrecy::zeroize::Zeroizing;
 use sha2::Digest;
 use ssh_agent_lib::proto::Identity;
 use ssh_agent_lib::proto::message::PublicCredential;
 use ssh_agent_lib::ssh_key::HashAlg::Sha256;
 use ssh_agent_lib::ssh_key::public::{Ed25519PublicKey, KeyData, SkEd25519};
-use zeroize::Zeroizing;
 
 use age_plugin_ssh_agent::agent::{AgentClient, SIGNATURE_LEN};
 use age_plugin_ssh_agent::identity::Identity as AgeIdentity;

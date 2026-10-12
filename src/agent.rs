@@ -2,6 +2,7 @@
 //!
 //! Only plain Ed25519 keys are exposed, since key derivation needs deterministic signatures.
 
+use age_core::secrecy::zeroize::Zeroizing;
 use ssh_agent_lib::blocking::Client;
 use ssh_agent_lib::proto::message::PublicCredential;
 use ssh_agent_lib::proto::{Identity, SignRequest};
@@ -10,7 +11,6 @@ use ssh_agent_lib::ssh_key::HashAlg::Sha256;
 use std::error::Error;
 use std::os::unix::net::UnixStream;
 use std::str::FromStr;
-use zeroize::Zeroizing;
 
 /// [`Agent`] over a Unix socket connection, as used by the binary.
 pub type UnixStreamAgent = Agent<Client<UnixStream>>;

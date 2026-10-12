@@ -13,7 +13,7 @@ use x25519_dalek::StaticSecret;
 use crate::agent::{Agent, AgentClient};
 
 use crate::identity::Identity;
-use zeroize::Zeroizing;
+use age_core::secrecy::zeroize::Zeroizing;
 
 /// Domain separator prefixed to every message the agent signs, and to the identity encoding.
 pub const NAMESPACE: &[u8] = b"age-plugin-ssh-agent/v1";

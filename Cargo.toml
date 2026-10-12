@@ -8,17 +8,16 @@ publish = false
 age = "0.12.1"
 age-core = "0.12.0"
 age-plugin = "0.7.0"
-base64 = "0.23"
+base64 = "0.22"
 # match age-core's bech32 because HRP changed in 0.12.x
 bech32 = "0.11.1"
 chrono = "0.4"
 clap = { version = "4.6.7", features = ["derive", "env"] }
-hkdf = "0.13.0"
-rand = "0.10.3"
-sha2 = "0.11.0"
+hkdf = { version = "0.12", features = ["std"] }
+rand = "0.8"
+sha2 = "0.10"
 ssh-agent-lib = { version = "0.6.0", default-features = false }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-zeroize = "1.9.0"
 
 [[bin]]
 name = "age-plugin-ssh-agent"

@@ -4,7 +4,7 @@
 //! `NAMESPACE (23 bytes) ‖ SHA-256 key fingerprint (32) ‖ secret (32)`, uppercased like age's own
 //! secret keys.
 
-use rand::TryRng;
+use rand::RngCore;
 
 use std::error::Error;
 use std::fmt;
@@ -14,12 +14,12 @@ use crate::crypto::{NAMESPACE, derive_wrapping_key, derive_x25519_secret, sign_i
 use age_core::format::{FILE_KEY_BYTES, FileKey, Stanza};
 use age_core::primitives::{aead_decrypt, aead_encrypt, bech32_encode};
 use age_core::secrecy::ExposeSecret;
+use age_core::secrecy::zeroize::Zeroizing;
 use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
 use bech32::Hrp;
-use rand::rngs::SysRng;
+use rand::rngs::OsRng;
 use ssh_agent_lib::proto::Identity as AgentIdentity;
 use ssh_agent_lib::ssh_key::HashAlg;
-use zeroize::Zeroizing;
 
 const SECRET_LEN: usize = 32;
 const FILE_SALT_LEN: usize = 32;
@@ -50,7 +50,7 @@ impl Identity {
             .sha256()
             .expect("fingerprint was not SHA256");
         let mut secret = Zeroizing::new([0u8; SECRET_LEN]);
-        SysRng.try_fill_bytes(secret.as_mut_slice())?;
+        OsRng.try_fill_bytes(secret.as_mut_slice())?;
 
         Ok(Identity {
             fingerprint,
@@ -108,7 +108,7 @@ impl Identity {
         file_key: &FileKey,
     ) -> Result<Stanza, Box<dyn Error>> {
         let mut file_salt = [0u8; FILE_SALT_LEN];
-        SysRng.try_fill_bytes(&mut file_salt)?;
+        OsRng.try_fill_bytes(&mut file_salt)?;
         let key = self.wrapping_key(agent, file_salt)?;
         Ok(Stanza {
             tag: STANZA_TAG.into(),
